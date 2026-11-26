@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y git
       - name: patch-set applies cleanly against the pinned Ladybird
-        run: sh tests/test_patches.sh
+        run: sh scripts/check_patches.sh
 
   # Full Ladybird build with the patch-set applied: expensive, not a merge gate.
   full-ladybird-build:

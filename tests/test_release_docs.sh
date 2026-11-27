@@ -7,8 +7,10 @@ cd "$(dirname "$0")/.." || exit 2
 fail=0
 
 # 1. Env-var table == scripts' actual usage (across the whole repo incl. fixtures).
-used=$(grep -rhoE 'LKB_[A-Z_]+' scripts/ 2>/dev/null | sort -u)
-documented=$(grep -ohE 'LKB_[A-Z_]+' README.md 2>/dev/null | sort -u)
+# Word boundary required: a bare LKB_* run inside a longer identifier (the
+# HAVE_LKB_BRIDGE compile definition) is not an environment variable.
+used=$(grep -rhoE '(^|[^A-Za-z0-9_]|-D)LKB_[A-Z_]+' scripts/ 2>/dev/null | grep -oE 'LKB_[A-Z_]+' | sort -u)
+documented=$(grep -ohE '(^|[^A-Za-z0-9_]|-D)LKB_[A-Z_]+' README.md 2>/dev/null | grep -oE 'LKB_[A-Z_]+' | sort -u)
 for v in $used; do
     printf '%s\n' "$documented" | grep -qx "$v" || { echo "FAIL: $v used by scripts but not in README"; fail=1; }
 done

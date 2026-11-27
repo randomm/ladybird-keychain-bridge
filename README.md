@@ -33,6 +33,7 @@ keychain (Apple TN3137) — it provides no at-rest claim there.
 | `LKB_PROBE_RESULTS` | Path where `scripts/probe_system_vault.sh` writes its JSON probe matrix | `docs/probes/latest.json` |
 | `LKB_BUILD_DIR` | CMake build directory used by the test/smoke/probe scripts | `build` |
 | `LKB_LADYBIRD_DIR` | Location of the pinned Ladybird checkout used by `scripts/sync_ladybird.sh` and `scripts/check_patches.sh` | `../ladybird-pinned` |
+| `LKB_BRIDGE_DIR` | CMake define wiring the vault libraries into the browser build (`-DLKB_BRIDGE_DIR=<bridge checkout>`); see `docs/integration.md` | unset (browser compiles without credentials; every surface declines explicitly) |
 | `OPENSSL_ROOT_DIR` | Standard CMake hint for locating OpenSSL on macOS | brew prefix |
 
 ### Owner-run scripts (never wired into CI)

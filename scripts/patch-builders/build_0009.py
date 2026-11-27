@@ -394,7 +394,7 @@ edit("UI/Qt/Application.h",
 
 edit("UI/Qt/CMakeLists.txt",
      "    CredentialSettingsPage.cpp\n    HistoryPage.cpp",
-     "    CredentialBridgeHost.cpp\n    CredentialSettingsPage.cpp\n    HistoryPage.cpp")
+     "    CredentialsBridgeHost.cpp\n    CredentialSettingsPage.cpp\n    HistoryPage.cpp")
 
 edit("UI/Qt/CMakeLists.txt",
      "target_link_libraries(ladybird_impl PRIVATE LibDatabase LibFileSystem LibUnicode)",

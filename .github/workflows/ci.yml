@@ -39,7 +39,7 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - run: brew install cmake ninja openssl@3 qt
+      - run: brew install cmake ninja openssl@3
       - run: sh scripts/sync_ladybird.sh
       - name: apply patch-set
         run: |
@@ -48,5 +48,9 @@ jobs:
             git -C ../ladybird-pinned am --abort 2>/dev/null || true
             git -C ../ladybird-pinned apply --3way "$GITHUB_WORKSPACE/$p"
           done
-      - name: build (verification job; owner-triggered)
-        run: echo "placeholder: full build steps land with the patch-set tasks"
+      - name: build TestLibWeb from the patched tree (preset-driven, owner-triggered)
+        run: cmake --preset Release && cmake --build --preset Release --target TestLibWeb
+        working-directory: ../ladybird-pinned
+      - name: run the credential-detection suite
+        run: ctest --preset Release -R TestLibWeb --output-on-failure
+        working-directory: ../ladybird-pinned

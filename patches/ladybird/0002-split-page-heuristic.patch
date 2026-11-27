@@ -1,0 +1,54 @@
+diff --git a/Libraries/LibWeb/HTML/HTMLInputElement.cpp b/Libraries/LibWeb/HTML/HTMLInputElement.cpp
+index cb2b4a50..c7e76794 100644
+--- a/Libraries/LibWeb/HTML/HTMLInputElement.cpp
++++ b/Libraries/LibWeb/HTML/HTMLInputElement.cpp
+@@ -1842,8 +1842,49 @@ void HTMLInputElement::did_receive_focus()
+     }
+ }
+ 
++static bool has_same_page_username_field(HTMLInputElement const& input)
++{
++    auto const* form = input.form();
++    if (!form)
++        return false;
++    auto const controls = form->elements();
++    for (size_t i = 0; i < controls->length(); ++i) {
++        auto* element = controls->item(i);
++        if (!is<HTMLInputElement>(element))
++            continue;
++        auto const& other = static_cast<HTMLInputElement const&>(*element);
++        if (other.type_state() == HTMLInputElement::TypeAttributeState::Password)
++            continue;
++        if (other.parse_autocomplete_attribute().field_name == "username"_utf16)
++            return true;
++        auto const name = other.name();
++        if (name == "username"_utf16 || name == "user"_utf16 || name == "email"_utf16)
++            return true;
++    }
++    return false;
++}
++
+ void HTMLInputElement::did_lose_focus()
+ {
++    // ladybird-keychain-bridge (M4b): split-page heuristic. A filled password
++    // field that loses focus with no username field in its form offers the UI a
++    // "fill username later" prompt via the same hook as submit-time detection.
++    if (m_type == TypeAttributeState::Password && !value().is_empty() && !has_same_page_username_field(*this)) {
++        CredentialsSaveRequestPayload payload;
++        payload.field_scope = "password_only"_string;
++        payload.secret = String::from_utf8(value().to_byte_string());
++        auto& doc = document();
++        payload.frame_origin = doc.origin().serialize();
++        payload.submit_action_origin = payload.frame_origin;
++        if (auto top = doc.relevant_settings_object().top_level_origin(); top.has_value())
++            payload.top_level_origin = top->serialize();
++        else
++            payload.top_level_origin = payload.frame_origin;
++        if (auto navigable = doc.navigable())
++            payload.frame_id = navigable->id();
++        doc.page().client().page_did_request_save_credentials(payload);
++    }
++
+     reveal_cursor_if_pending();
+ 
+     if (!m_date_time_fields.is_empty()) {

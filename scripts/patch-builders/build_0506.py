@@ -46,7 +46,7 @@ edit("Libraries/LibWebCommon/Page/TextEditingCommand.h",
      "        DeleteToEndOfParagraph,\n        InsertText,\n    };", "0006")
 edit("Libraries/LibWebCommon/Page/TextEditingCommand.h",
      "    Type type { Type::MoveBackward };\n    bool extend_selection { false };",
-     "    Type type { Type::MoveBackward };\n    bool extend_selection { false };\n    Utf16String text {};\n    // Credential inserts carry the token the UI process received with the\n    // popup request; Page::handle_text_editing_command_from_ui validates it.\n    Optional<u64> fill_token {};", "0006")
+     "    Type type { Type::MoveBackward };\n    bool extend_selection { false };\n    Utf16String text {};\n    // Credential inserts carry the token the UI process received with the\n    // popup request; Page::handle_text_editing_command_from_ui validates it.\n    Optional<u64> fill_token {};\n    // Popups anchored on a username field carry the username too: Page\n    // fills the focused field with it and routes the secret to the password field.\n    Utf16String username {};", "0006")
 edit("Libraries/LibWebCommon/Page/TextEditingCommand.h",
      "#include <AK/Types.h>",
      "#include <AK/Optional.h>\n#include <AK/Types.h>\n#include <AK/Utf16String.h>", "0006")
@@ -56,7 +56,7 @@ edit("Libraries/LibWebCommon/Page/TextEditingCommand.ipc",
      "    DeleteToEndOfParagraph,\n    InsertText,\n}", "0006")
 edit("Libraries/LibWebCommon/Page/TextEditingCommand.ipc",
      "    Web::TextEditingCommand::Type type;\n    bool extend_selection;\n}",
-     "    Web::TextEditingCommand::Type type;\n    bool extend_selection;\n    Utf16String text;\n    Optional<u64> fill_token;\n}", "0006")
+     "    Web::TextEditingCommand::Type type;\n    bool extend_selection;\n    Utf16String text;\n    Optional<u64> fill_token;\n    Utf16String username;\n}", "0006")
 
 edit("Libraries/LibWeb/Page/EventHandler.cpp",
      """        target->handle_delete(input_type);
@@ -116,6 +116,35 @@ bool Page::handle_text_editing_command_from_ui(TextEditingCommand const& command
             return false;
         if (element->document().focused_area().ptr() != element.ptr())
             return false;
+        if (pending->kind == "username"_utf16) {
+            // The popup was anchored on a username field: the username goes to
+            // the focused field (like typing) and the secret to the form's
+            // password field — a secret never lands in a username box.
+            auto username_navigable = hosted_focused_navigable();
+            if (!username_navigable)
+                return false;
+            TextEditingCommand username_command;
+            username_command.type = TextEditingCommand::Type::InsertText;
+            username_command.text = command.username;
+            auto const result = username_navigable->event_handler().handle_text_editing_command(username_command);
+            if (result != EventResult::Handled && result != EventResult::Accepted)
+                return false;
+            auto& input = static_cast<HTML::HTMLInputElement&>(*element);
+            if (auto form = input.form()) {
+                auto controls = form->elements();
+                for (size_t i = 0; i < controls->length(); ++i) {
+                    auto item = controls->item(i);
+                    if (!is<HTML::HTMLInputElement>(item))
+                        continue;
+                    auto& password_input = static_cast<HTML::HTMLInputElement&>(*item);
+                    if (password_input.type_state() == HTML::HTMLInputElement::TypeAttributeState::Password) {
+                        (void)password_input.set_value(command.text.utf16_view());
+                        break;
+                    }
+                }
+            }
+            return true;
+        }
     }
     auto navigable = hosted_focused_navigable();
     if (!navigable)
@@ -123,6 +152,10 @@ bool Page::handle_text_editing_command_from_ui(TextEditingCommand const& command
     auto result = navigable->event_handler().handle_text_editing_command(command);
     return result == EventResult::Handled || result == EventResult::Accepted;
 }""", "0006")
+
+edit("Libraries/LibWeb/Page/Page.cpp",
+     "#include <LibWeb/HTML/Focus.h>\n#include <LibWeb/HTML/HTMLIFrameElement.h>",
+     "#include <LibWeb/HTML/Focus.h>\n#include <LibWeb/HTML/HTMLFormControlsCollection.h>\n#include <LibWeb/HTML/HTMLFormElement.h>\n#include <LibWeb/HTML/HTMLIFrameElement.h>", "0006")
 
 edit("Services/WebContent/WebContentServer.ipc",
      "    key_event(Web::PageId page_id, Web::KeyEvent event) =|",
@@ -312,7 +345,7 @@ edit("Libraries/LibWebView/ViewImplementation.h",
      "    void did_request_select_dropdown(Badge<WebContentPage>, WebContentPage& requesting_page, Gfx::IntPoint content_position, i32 minimum_width, Vector<Web::HTML::SelectItem> items);",
      """    void did_request_select_dropdown(Badge<WebContentPage>, WebContentPage& requesting_page, Gfx::IntPoint content_position, i32 minimum_width, Vector<Web::HTML::SelectItem> items);
     void did_request_credential_suggestions(Badge<WebContentPage>, WebContentPage& requesting_page, URL::Origin origin, Gfx::IntPoint content_position, i32 minimum_width, Utf16String field_kind, u64 fill_token);
-    void select_credential(u64 suggestion_id, Utf16String secret, u64 fill_token);""", "0005")
+    void select_credential(u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token);""", "0005")
 
 edit("Libraries/LibWebView/ViewImplementation.h",
      "    RefPtr<WebContentPage> m_select_dropdown_page;",
@@ -346,12 +379,13 @@ void ViewImplementation::did_request_credential_suggestions(Badge<WebContentPage
         on_request_credential_suggestions(origin, to_widget_position(content_position), minimum_width / device_pixel_ratio(), field_kind, fill_token);
 }
 
-void ViewImplementation::select_credential(u64 suggestion_id, Utf16String secret, u64 fill_token)
+void ViewImplementation::select_credential(u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token)
 {
     page().async_credential_selected(suggestion_id);
 
     Web::TextEditingCommand command;
     command.type = Web::TextEditingCommand::Type::InsertText;
+    command.username = move(username);
     command.text = move(secret);
     command.fill_token = fill_token;
     page().async_insert_text(command);
@@ -380,12 +414,12 @@ edit("Services/Hub/HubClient.ipc",
 edit("Services/Hub/HubServer.ipc",
      "    view_answer_permission_request(u64 view_id, u64 answer_id, Web::Permissions::PromptOutcome outcome) =|",
      """    view_answer_permission_request(u64 view_id, u64 answer_id, Web::Permissions::PromptOutcome outcome) =|
-    view_select_credential(u64 view_id, u64 suggestion_id, Utf16String secret, u64 fill_token) =|""", "0005")
+    view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token) =|""", "0005")
 
 edit("Services/Hub/ConnectionFromUI.h",
      "    virtual void view_answer_permission_request(u64 view_id, u64 answer_id, Web::Permissions::PromptOutcome outcome) override;",
      """    virtual void view_answer_permission_request(u64 view_id, u64 answer_id, Web::Permissions::PromptOutcome outcome) override;
-    virtual void view_select_credential(u64 view_id, u64 suggestion_id, Utf16String secret, u64 fill_token) override;""", "0005")
+    virtual void view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token) override;""", "0005")
 
 edit("Services/Hub/ConnectionFromUI.cpp",
      """void ConnectionFromUI::view_answer_permission_request(u64 view_id, u64 answer_id, Web::Permissions::PromptOutcome outcome)
@@ -403,10 +437,10 @@ edit("Services/Hub/ConnectionFromUI.cpp",
     }
 }
 
-void ConnectionFromUI::view_select_credential(u64 view_id, u64 suggestion_id, Utf16String secret, u64 fill_token)
+void ConnectionFromUI::view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token)
 {
     if (auto* view = find_view(view_id))
-        view->select_credential(suggestion_id, move(secret), fill_token);
+        view->select_credential(suggestion_id, move(username), move(secret), fill_token);
 }""", "0005")
 
 edit("UI/Qt/NativeTextEditingLineEdit.cpp",
@@ -433,11 +467,11 @@ edit("Libraries/LibWeb/HTML/HTMLInputElement.cpp",
 # aggregate inits must name every field under -Werror,-Wmissing-field-initializers.
 edit("UI/Qt/NativeTextEditingBindings.mm",
      "            return Web::TextEditingCommand { command.type, false };",
-     "            return Web::TextEditingCommand { command.type, false, {}, {} };", "0006")
+     "            return Web::TextEditingCommand { command.type, false, {}, {}, {} };", "0006")
 
 edit("UI/Qt/NativeTextEditingBindings.mm",
      "            return Web::TextEditingCommand { command.type, true };",
-     "            return Web::TextEditingCommand { command.type, true, {}, {} };", "0006")
+     "            return Web::TextEditingCommand { command.type, true, {}, {}, {} };", "0006")
 
 edit("UI/Qt/RemoteView.h",
      "    decltype(Hub::View::on_request_save_credentials) on_request_save_credentials;",
@@ -539,6 +573,7 @@ edit("UI/Qt/Tab.cpp",
                 return;
             auto const& suggestion = m_credentials_suggestions[static_cast<size_t>(*selected_id)];
             HubConnection::the().async_view_select_credential(view().view_id(), suggestion.suggestion_id,
+                suggestion.username,
                 delegate->secret_for(suggestion.suggestion_id), m_credentials_fill_token);
         };
         m_credentials_dropdown->open(view().mapToGlobal(QPoint { position.x(), position.y() }), minimum_width, items);

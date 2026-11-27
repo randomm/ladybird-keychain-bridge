@@ -579,30 +579,32 @@ edit("Libraries/LibWebView/ViewImplementation.h",
     Function<void(Utf16String const&)> on_request_js_prevent_silent_access;""", "0007")
 
 edit("Libraries/LibWebView/ViewImplementation.h",
-     "    void select_credential(u64 suggestion_id, Utf16String secret, u64 fill_token);",
-     """    void select_credential(u64 suggestion_id, Utf16String secret, u64 fill_token);
+     "    void select_credential(u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token);",
+     """    void select_credential(u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token);
     void did_request_js_get_credentials(Badge<WebContentPage>, WebContentPage&, u64 request_id, Utf16String origin, bool allow_silent, bool password_requested);
     void did_request_js_store_credentials(Badge<WebContentPage>, WebContentPage&, Utf16String origin, Utf16String username, Utf16String secret);
     void did_request_js_prevent_silent_access(Badge<WebContentPage>, WebContentPage&, Utf16String origin);
     void resolve_js_get_credentials(u64 request_id, bool found, Utf16String username, Utf16String secret);""", "0007")
 
 edit("Libraries/LibWebView/ViewImplementation.cpp",
-     """void ViewImplementation::select_credential(u64 suggestion_id, Utf16String secret, u64 fill_token)
+     """void ViewImplementation::select_credential(u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token)
 {
     page().async_credential_selected(suggestion_id);
 
     Web::TextEditingCommand command;
     command.type = Web::TextEditingCommand::Type::InsertText;
+    command.username = move(username);
     command.text = move(secret);
     command.fill_token = fill_token;
     page().async_insert_text(command);
 }""",
-     """void ViewImplementation::select_credential(u64 suggestion_id, Utf16String secret, u64 fill_token)
+     """void ViewImplementation::select_credential(u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token)
 {
     page().async_credential_selected(suggestion_id);
 
     Web::TextEditingCommand command;
     command.type = Web::TextEditingCommand::Type::InsertText;
+    command.username = move(username);
     command.text = move(secret);
     command.fill_token = fill_token;
     page().async_insert_text(command);
@@ -669,25 +671,25 @@ edit("Services/Hub/HubClient.ipc",
     view_request_js_prevent_silent_access(u64 view_id, Utf16String origin) =|""", "0007")
 
 edit("Services/Hub/HubServer.ipc",
-     "    view_select_credential(u64 view_id, u64 suggestion_id, Utf16String secret, u64 fill_token) =|",
-     """    view_select_credential(u64 view_id, u64 suggestion_id, Utf16String secret, u64 fill_token) =|
+     "    view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token) =|",
+     """    view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token) =|
     view_answer_js_get_credentials(u64 view_id, u64 request_id, bool found, Utf16String username, Utf16String secret) =|""", "0007")
 
 edit("Services/Hub/ConnectionFromUI.h",
-     "    virtual void view_select_credential(u64 view_id, u64 suggestion_id, Utf16String secret, u64 fill_token) override;",
-     """    virtual void view_select_credential(u64 view_id, u64 suggestion_id, Utf16String secret, u64 fill_token) override;
+     "    virtual void view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token) override;",
+     """    virtual void view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token) override;
     virtual void view_answer_js_get_credentials(u64 view_id, u64 request_id, bool found, Utf16String username, Utf16String secret) override;""", "0007")
 
 edit("Services/Hub/ConnectionFromUI.cpp",
-     """void ConnectionFromUI::view_select_credential(u64 view_id, u64 suggestion_id, Utf16String secret, u64 fill_token)
+     """void ConnectionFromUI::view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token)
 {
     if (auto* view = find_view(view_id))
-        view->select_credential(suggestion_id, move(secret), fill_token);
+        view->select_credential(suggestion_id, move(username), move(secret), fill_token);
 }""",
-     """void ConnectionFromUI::view_select_credential(u64 view_id, u64 suggestion_id, Utf16String secret, u64 fill_token)
+     """void ConnectionFromUI::view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token)
 {
     if (auto* view = find_view(view_id))
-        view->select_credential(suggestion_id, move(secret), fill_token);
+        view->select_credential(suggestion_id, move(username), move(secret), fill_token);
 }
 
 void ConnectionFromUI::view_answer_js_get_credentials(u64 view_id, u64 request_id, bool found, Utf16String username, Utf16String secret)

@@ -32,10 +32,21 @@ diff --git a/Libraries/LibWeb/Page/EventHandler.cpp b/Libraries/LibWeb/Page/Even
 diff --git a/Libraries/LibWeb/Page/Page.cpp b/Libraries/LibWeb/Page/Page.cpp
 --- a/Libraries/LibWeb/Page/Page.cpp
 +++ b/Libraries/LibWeb/Page/Page.cpp
-@@ -700,6 +700,33 @@
+@@ -33,6 +33,8 @@
+ #include <LibWeb/HTML/EventLoop/EventLoop.h>
+ #include <LibWeb/HTML/EventNames.h>
+ #include <LibWeb/HTML/Focus.h>
++#include <LibWeb/HTML/HTMLFormControlsCollection.h>
++#include <LibWeb/HTML/HTMLFormElement.h>
+ #include <LibWeb/HTML/HTMLIFrameElement.h>
+ #include <LibWeb/HTML/HTMLInputElement.h>
+ #include <LibWeb/HTML/HTMLMediaElement.h>
+@@ -698,6 +700,62 @@
+         && navigable->local_root()->compositor_user_input_scroll_count() > *user_input_scroll_count_with_nothing_to_scroll)
+         async_scroll_performed_default_action = true;
      return navigable->event_handler().handle_keydown(key, modifiers, code_point, repeat, should_insert_text, async_scroll_performed_default_action, editing_commands, native_editing_binding_resolved);
- }
- 
++}
++
 +bool Page::handle_text_editing_command_from_ui(TextEditingCommand const& command)
 +{
 +    // ladybird-keychain-bridge (M7b): the UI injects a user-chosen credential
@@ -55,17 +66,44 @@ diff --git a/Libraries/LibWeb/Page/Page.cpp b/Libraries/LibWeb/Page/Page.cpp
 +            return false;
 +        if (element->document().focused_area().ptr() != element.ptr())
 +            return false;
++        if (pending->kind == "username"_utf16) {
++            // The popup was anchored on a username field: the username goes to
++            // the focused field (like typing) and the secret to the form's
++            // password field — a secret never lands in a username box.
++            auto username_navigable = hosted_focused_navigable();
++            if (!username_navigable)
++                return false;
++            TextEditingCommand username_command;
++            username_command.type = TextEditingCommand::Type::InsertText;
++            username_command.text = command.username;
++            auto const result = username_navigable->event_handler().handle_text_editing_command(username_command);
++            if (result != EventResult::Handled && result != EventResult::Accepted)
++                return false;
++            auto& input = static_cast<HTML::HTMLInputElement&>(*element);
++            if (auto form = input.form()) {
++                auto controls = form->elements();
++                for (size_t i = 0; i < controls->length(); ++i) {
++                    auto item = controls->item(i);
++                    if (!is<HTML::HTMLInputElement>(item))
++                        continue;
++                    auto& password_input = static_cast<HTML::HTMLInputElement&>(*item);
++                    if (password_input.type_state() == HTML::HTMLInputElement::TypeAttributeState::Password) {
++                        (void)password_input.set_value(command.text.utf16_view());
++                        break;
++                    }
++                }
++            }
++            return true;
++        }
 +    }
 +    auto navigable = hosted_focused_navigable();
 +    if (!navigable)
 +        return false;
 +    auto result = navigable->event_handler().handle_text_editing_command(command);
 +    return result == EventResult::Handled || result == EventResult::Accepted;
-+}
-+
+ }
+ 
  EventResult Page::handle_keyup(UIEvents::KeyCode key, unsigned modifiers, u32 code_point, bool repeat)
- {
-     auto navigable = hosted_focused_navigable();
 diff --git a/Libraries/LibWeb/Page/Page.h b/Libraries/LibWeb/Page/Page.h
 --- a/Libraries/LibWeb/Page/Page.h
 +++ b/Libraries/LibWeb/Page/Page.h
@@ -91,7 +129,7 @@ diff --git a/Libraries/LibWebCommon/Page/TextEditingCommand.h b/Libraries/LibWeb
  
  namespace Web {
  
-@@ -31,10 +33,15 @@
+@@ -31,10 +33,18 @@
          DeleteWordBackward,
          DeleteWordForward,
          DeleteToEndOfParagraph,
@@ -104,13 +142,16 @@ diff --git a/Libraries/LibWebCommon/Page/TextEditingCommand.h b/Libraries/LibWeb
 +    // Credential inserts carry the token the UI process received with the
 +    // popup request; Page::handle_text_editing_command_from_ui validates it.
 +    Optional<u64> fill_token {};
++    // Popups anchored on a username field carry the username too: Page
++    // fills the focused field with it and routes the secret to the password field.
++    Utf16String username {};
  
      bool operator==(TextEditingCommand const&) const = default;
  };
 diff --git a/Libraries/LibWebCommon/Page/TextEditingCommand.ipc b/Libraries/LibWebCommon/Page/TextEditingCommand.ipc
 --- a/Libraries/LibWebCommon/Page/TextEditingCommand.ipc
 +++ b/Libraries/LibWebCommon/Page/TextEditingCommand.ipc
-@@ -26,10 +26,13 @@
+@@ -26,10 +26,14 @@
      DeleteWordBackward,
      DeleteWordForward,
      DeleteToEndOfParagraph,
@@ -123,6 +164,7 @@ diff --git a/Libraries/LibWebCommon/Page/TextEditingCommand.ipc b/Libraries/LibW
      bool extend_selection;
 +    Utf16String text;
 +    Optional<u64> fill_token;
++    Utf16String username;
  }
 diff --git a/Services/WebContent/ConnectionFromClient.cpp b/Services/WebContent/ConnectionFromClient.cpp
 --- a/Services/WebContent/ConnectionFromClient.cpp
@@ -191,10 +233,10 @@ diff --git a/UI/Qt/NativeTextEditingBindings.mm b/UI/Qt/NativeTextEditingBinding
      for (auto const& command : commands) {
          if (selector == command.selector)
 -            return Web::TextEditingCommand { command.type, false };
-+            return Web::TextEditingCommand { command.type, false, {}, {} };
++            return Web::TextEditingCommand { command.type, false, {}, {}, {} };
          if (command.selection_selector && selector == command.selection_selector)
 -            return Web::TextEditingCommand { command.type, true };
-+            return Web::TextEditingCommand { command.type, true, {}, {} };
++            return Web::TextEditingCommand { command.type, true, {}, {}, {} };
      }
      return {};
  }

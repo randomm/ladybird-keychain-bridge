@@ -61,10 +61,12 @@ diff --git a/Libraries/LibWeb/HTML/HTMLInputElement.cpp b/Libraries/LibWeb/HTML/
 diff --git a/Libraries/LibWeb/Page/Page.cpp b/Libraries/LibWeb/Page/Page.cpp
 --- a/Libraries/LibWeb/Page/Page.cpp
 +++ b/Libraries/LibWeb/Page/Page.cpp
-@@ -1568,6 +1595,18 @@
+@@ -1566,6 +1624,18 @@
+         m_pending_non_blocking_dialog_target = move(target);
+         m_client->page_did_request_select_dropdown(local_root_id, content_position, minimum_width, move(items));
      }
- }
- 
++}
++
 +void Page::did_request_credential_suggestions(GC::Weak<HTML::HTMLElement> target, HTML::CrossProcessId local_root_id, URL::Origin origin, Web::CSSPixelPoint content_position, Web::CSSPixels minimum_width, Utf16String field_kind)
 +{
 +    // The UI must prove knowledge of this token when the secret arrives
@@ -75,11 +77,9 @@ diff --git a/Libraries/LibWeb/Page/Page.cpp b/Libraries/LibWeb/Page/Page.cpp
 +    m_pending_credential_fills.set(fill_token, PendingCredentialFill { .element = move(target), .kind = field_kind });
 +    m_client->page_did_request_credential_suggestions(move(origin), local_root_id, content_position, minimum_width,
 +                                                       move(field_kind), fill_token);
-+}
-+
+ }
+ 
  void Page::select_dropdown_closed(Optional<u32> const& selected_item_id)
- {
-     if (m_pending_non_blocking_dialog == PendingNonBlockingDialog::Select) {
 diff --git a/Libraries/LibWeb/Page/Page.h b/Libraries/LibWeb/Page/Page.h
 --- a/Libraries/LibWeb/Page/Page.h
 +++ b/Libraries/LibWeb/Page/Page.h
@@ -121,12 +121,10 @@ diff --git a/Libraries/LibWeb/Page/Page.h b/Libraries/LibWeb/Page/Page.h
 diff --git a/Libraries/LibWebView/ViewImplementation.cpp b/Libraries/LibWebView/ViewImplementation.cpp
 --- a/Libraries/LibWebView/ViewImplementation.cpp
 +++ b/Libraries/LibWebView/ViewImplementation.cpp
-@@ -3444,6 +3444,32 @@
-     m_select_dropdown_page = requesting_page;
-     if (on_request_select_dropdown)
+@@ -3446,6 +3446,33 @@
          on_request_select_dropdown(to_widget_position(content_position), minimum_width / device_pixel_ratio(), move(items));
-+}
-+
+ }
+ 
 +void ViewImplementation::did_request_credential_suggestions(Badge<WebContentPage>, WebContentPage& requesting_page, URL::Origin origin, Gfx::IntPoint content_position, i32 minimum_width, Utf16String field_kind, u64 fill_token)
 +{
 +    // Repeated focus of the same field of the same page (dialog close, focus
@@ -142,18 +140,21 @@ diff --git a/Libraries/LibWebView/ViewImplementation.cpp b/Libraries/LibWebView/
 +        on_request_credential_suggestions(origin, to_widget_position(content_position), minimum_width / device_pixel_ratio(), field_kind, fill_token);
 +}
 +
-+void ViewImplementation::select_credential(u64 suggestion_id, Utf16String secret, u64 fill_token)
++void ViewImplementation::select_credential(u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token)
 +{
 +    page().async_credential_selected(suggestion_id);
 +
 +    Web::TextEditingCommand command;
 +    command.type = Web::TextEditingCommand::Type::InsertText;
++    command.username = move(username);
 +    command.text = move(secret);
 +    command.fill_token = fill_token;
 +    page().async_insert_text(command);
- }
- 
++}
++
  void ViewImplementation::select_dropdown_closed(Optional<u32> const& selected_item_id)
+ {
+     NonnullRefPtr<WebContentPage> target = m_select_dropdown_page ? *m_select_dropdown_page : page();
 diff --git a/Libraries/LibWebView/ViewImplementation.h b/Libraries/LibWebView/ViewImplementation.h
 --- a/Libraries/LibWebView/ViewImplementation.h
 +++ b/Libraries/LibWebView/ViewImplementation.h
@@ -170,7 +171,7 @@ diff --git a/Libraries/LibWebView/ViewImplementation.h b/Libraries/LibWebView/Vi
      void did_request_file_picker(Badge<WebContentPage>, WebContentPage& requesting_page, Web::HTML::FileFilter const& accepted_file_types, Web::HTML::AllowMultipleFiles);
      void did_request_select_dropdown(Badge<WebContentPage>, WebContentPage& requesting_page, Gfx::IntPoint content_position, i32 minimum_width, Vector<Web::HTML::SelectItem> items);
 +    void did_request_credential_suggestions(Badge<WebContentPage>, WebContentPage& requesting_page, URL::Origin origin, Gfx::IntPoint content_position, i32 minimum_width, Utf16String field_kind, u64 fill_token);
-+    void select_credential(u64 suggestion_id, Utf16String secret, u64 fill_token);
++    void select_credential(u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token);
  
      // Something the UI shows about this view may have changed, like whether it can undo or show its source.
      virtual void did_change_state() { }
@@ -220,10 +221,10 @@ diff --git a/Services/Hub/ConnectionFromUI.cpp b/Services/Hub/ConnectionFromUI.c
      }
 +}
 +
-+void ConnectionFromUI::view_select_credential(u64 view_id, u64 suggestion_id, Utf16String secret, u64 fill_token)
++void ConnectionFromUI::view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token)
 +{
 +    if (auto* view = find_view(view_id))
-+        view->select_credential(suggestion_id, move(secret), fill_token);
++        view->select_credential(suggestion_id, move(username), move(secret), fill_token);
  }
  
  void ConnectionFromUI::active_view_changed(Optional<u64> view_id)
@@ -234,7 +235,7 @@ diff --git a/Services/Hub/ConnectionFromUI.h b/Services/Hub/ConnectionFromUI.h
      virtual void update_settings(u64 change_id, ByteString changes_json) override;
      virtual void view_answer(u64 view_id, u64 answer_id, bool answer) override;
      virtual void view_answer_permission_request(u64 view_id, u64 answer_id, Web::Permissions::PromptOutcome outcome) override;
-+    virtual void view_select_credential(u64 view_id, u64 suggestion_id, Utf16String secret, u64 fill_token) override;
++    virtual void view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token) override;
      virtual void destroy_view(u64 view_id) override;
      virtual void view_set_viewport(u64 view_id, Web::DevicePixelSize size, double device_pixel_ratio) override;
      virtual void view_set_system_theme(u64 view_id, Core::AnonymousBuffer theme) override;
@@ -256,7 +257,7 @@ diff --git a/Services/Hub/HubServer.ipc b/Services/Hub/HubServer.ipc
      update_settings(u64 change_id, ByteString changes_json) =|
      view_answer(u64 view_id, u64 answer_id, bool answer) =|
      view_answer_permission_request(u64 view_id, u64 answer_id, Web::Permissions::PromptOutcome outcome) =|
-+    view_select_credential(u64 view_id, u64 suggestion_id, Utf16String secret, u64 fill_token) =|
++    view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token) =|
      destroy_view(u64 view_id) =|
      view_set_viewport(u64 view_id, Web::DevicePixelSize size, double device_pixel_ratio) =|
      view_set_system_theme(u64 view_id, Core::AnonymousBuffer theme) =|
@@ -395,10 +396,12 @@ diff --git a/UI/Qt/Tab.cpp b/UI/Qt/Tab.cpp
  #include <UI/Qt/ApplicationActions.h>
  #include <UI/Qt/BookmarkPopover.h>
  #include <UI/Qt/BrowserWindow.h>
-@@ -603,6 +606,44 @@
+@@ -601,6 +604,45 @@
+         if (Utf16String::from_utf8(view().url().origin().serialize()) != payload.frame_origin)
+             return; // committed URL and payload origin must agree before any prompt
          show_save_credentials_prompt(view(), payload);
-     };
- 
++    };
++
 +    view().on_request_credential_suggestions = [this](URL::Origin const& origin, Gfx::IntPoint position, i32 minimum_width, Utf16String const& field_kind, u64 fill_token) {
 +        // The popup may only ever aim at the page this tab actually shows.
 +        if (Utf16String::from_utf8(view().url().origin().serialize()) != Utf16String::from_utf8(origin.serialize()))
@@ -432,14 +435,13 @@ diff --git a/UI/Qt/Tab.cpp b/UI/Qt/Tab.cpp
 +                return;
 +            auto const& suggestion = m_credentials_suggestions[static_cast<size_t>(*selected_id)];
 +            HubConnection::the().async_view_select_credential(view().view_id(), suggestion.suggestion_id,
++                suggestion.username,
 +                delegate->secret_for(suggestion.suggestion_id), m_credentials_fill_token);
 +        };
 +        m_credentials_dropdown->open(view().mapToGlobal(QPoint { position.x(), position.y() }), minimum_width, items);
-+    };
-+
+     };
+ 
      view().on_state_change = [this](Hub::ViewState const& previous_state) {
-         if (previous_state.page_mute_state != view().page_mute_state())
-             emit audio_state_changed(tab_index());
 diff --git a/UI/Qt/Tab.h b/UI/Qt/Tab.h
 --- a/UI/Qt/Tab.h
 +++ b/UI/Qt/Tab.h

@@ -1,14 +1,18 @@
 #include "Json.h"
 
+#include <cctype>
 #include <cstdio>
+#include <limits>
 
 namespace lkb {
 
 namespace {
 
 Error json_err(std::string_view what) {
-    return Error{ErrorCode::MalformedCsv, std::string(what)};
+    return Error{ErrorCode::MalformedJson, std::string(what)};
 }
+
+constexpr int max_json_depth = 64;
 
 void skip_ws(std::string_view t, size_t& pos) {
     while (pos < t.size() && (t[pos] == ' ' || t[pos] == '\t' || t[pos] == '\n' || t[pos] == '\r'))
@@ -70,9 +74,18 @@ ErrorOr<std::string> parse_string_raw(std::string_view t, size_t& pos) {
                 unsigned cp = 0;
                 for (int i = 0; i < 4; ++i) {
                     char h = t[pos++];
-                    unsigned v = (h <= '9') ? h - '0' : ((h | 32) - 'a' + 10);
+                    // Review fix: every nibble must be real hex — the old lax
+                    // test turned non-hex bytes into silent garbage values.
+                    if (!std::isxdigit(static_cast<unsigned char>(h)))
+                        return ErrorOr<std::string>::error(json_err("bad \\u nibble"));
+                    unsigned v = (h <= '9') ? static_cast<unsigned>(h - '0')
+                                            : static_cast<unsigned>((h | 32) - 'a' + 10);
                     cp = cp * 16 + v;
                 }
+                // Lone surrogates have no UTF-8 encoding; reject rather than
+                // emit CESU-8 garbage.
+                if (cp >= 0xD800 && cp <= 0xDFFF)
+                    return ErrorOr<std::string>::error(json_err("surrogate escape"));
                 if (cp < 0x80) {
                     out += static_cast<char>(cp);
                 } else if (cp < 0x800) {
@@ -149,10 +162,14 @@ ErrorOr<Json> Json::parse(std::string_view text) {
     return v;
 }
 
-ErrorOr<Json> Json::parse_value(std::string_view text, size_t& pos) {
+ErrorOr<Json> Json::parse_value(std::string_view text, size_t& pos, int depth) {
     skip_ws(text, pos);
     if (pos >= text.size())
         return ErrorOr<Json>::error(json_err("eof"));
+    // Review fix: untrusted nesting must not grow the stack (Review Focus 4).
+    // Counted per container level, top level included.
+    if (depth >= max_json_depth)
+        return ErrorOr<Json>::error(json_err("nested too deep"));
     char c = text[pos];
     if (c == '{') {
         ++pos;
@@ -170,7 +187,7 @@ ErrorOr<Json> Json::parse_value(std::string_view text, size_t& pos) {
             if (pos >= text.size() || text[pos] != ':')
                 return ErrorOr<Json>::error(json_err("expected colon"));
             ++pos;
-            auto value = parse_value(text, pos);
+            auto value = parse_value(text, pos, depth + 1);
             if (value.is_error())
                 return value;
             obj.set(std::move(key.value()), std::move(value.value()));
@@ -196,7 +213,7 @@ ErrorOr<Json> Json::parse_value(std::string_view text, size_t& pos) {
             return ErrorOr<Json>::ok(std::move(arr));
         }
         while (true) {
-            auto value = parse_value(text, pos);
+            auto value = parse_value(text, pos, depth + 1);
             if (value.is_error())
                 return value;
             arr.m_arr.push_back(std::move(value.value()));
@@ -238,17 +255,31 @@ ErrorOr<Json> Json::parse_value(std::string_view text, size_t& pos) {
         ++pos;
     if (pos >= text.size() || text[pos] < '0' || text[pos] > '9')
         return ErrorOr<Json>::error(json_err("bad value"));
-    std::int64_t sign = 1;
-    if (text[start] == '-')
-        sign = -1;
-    std::int64_t v = 0;
+    bool negative = text[start] == '-';
+    // Review fix: accumulate in uint64 with an explicit magnitude bound — the
+    // old int64 accumulation was signed-overflow UB on attacker-long digit runs.
+    std::uint64_t v = 0;
     while (pos < text.size() && text[pos] >= '0' && text[pos] <= '9') {
-        v = v * 10 + (text[pos] - '0');
+        unsigned d = static_cast<unsigned>(text[pos] - '0');
+        if (v > (std::numeric_limits<std::uint64_t>::max() - d) / 10)
+            return ErrorOr<Json>::error(json_err("number overflow"));
+        v = v * 10 + d;
         ++pos;
     }
     if (pos < text.size() && (text[pos] == '.' || text[pos] == 'e' || text[pos] == 'E'))
         return ErrorOr<Json>::error(json_err("doubles unsupported"));
-    return ErrorOr<Json>::ok(make_int(sign * v));
+    constexpr std::uint64_t max_mag =
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    if (!negative) {
+        if (v > max_mag)
+            return ErrorOr<Json>::error(json_err("number out of range"));
+        return ErrorOr<Json>::ok(make_int(static_cast<std::int64_t>(v)));
+    }
+    if (v == max_mag + 1)
+        return ErrorOr<Json>::ok(make_int(std::numeric_limits<std::int64_t>::min()));
+    if (v > max_mag)
+        return ErrorOr<Json>::error(json_err("number out of range"));
+    return ErrorOr<Json>::ok(make_int(-static_cast<std::int64_t>(v)));
 }
 
 std::int64_t Json::get_int(std::string const& key, std::int64_t fallback) const {

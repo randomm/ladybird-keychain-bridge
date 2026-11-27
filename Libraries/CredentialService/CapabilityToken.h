@@ -18,6 +18,9 @@ class CapabilityToken {
     static ErrorOr<CapabilityToken> mint(RedisAuthCallback&, Clock&);
 
     bool valid() const;
+    // Consume-on-use: the first valid call unlocks one admin operation; any
+    // later call (same TTL window or not) fails closed.
+    bool consume();
     void revoke() { m_revoked = true; }
     std::string const& value() const { return m_value; }
 
@@ -27,6 +30,7 @@ class CapabilityToken {
     std::string m_value;
     std::int64_t m_issued_at{0};
     bool m_revoked{false};
+    bool m_used{false};
     Clock* m_clock{nullptr};
 };
 

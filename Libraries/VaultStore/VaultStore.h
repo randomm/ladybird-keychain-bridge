@@ -28,6 +28,9 @@ class VaultStore {
                                      std::optional<std::string_view> username_hint);
     ErrorOr<void> put(CredentialRecord const& record);
     ErrorOr<void> remove_credential(std::int64_t id);
+    // Plaintext identity columns only — lets admin deletes audit the record's
+    // origin without decrypting the blob.
+    ErrorOr<Origin> origin_of_id(std::int64_t id);
     ErrorOr<std::vector<CredentialRecord>> all(size_t& out_undecodable);
     ErrorOr<void> remove_origin(Origin const& origin);
     ErrorOr<void> mark_never(Origin const& origin);

@@ -1,5 +1,6 @@
 add_library(lkb_service STATIC CapabilityToken.cpp CredentialService.cpp)
 target_link_libraries(lkb_service PUBLIC lkb_vault)
+target_link_libraries(lkb_service PRIVATE lkb_csv)
 target_include_directories(lkb_service PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(TestCapabilityToken tests/TestCapabilityToken.cpp)

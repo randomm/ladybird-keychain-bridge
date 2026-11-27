@@ -67,7 +67,7 @@ class Json {
     std::vector<Json> m_arr;
     std::map<std::string, Json> m_obj; // key order canonical: sorted by std::string (code units)
 
-    static ErrorOr<Json> parse_value(std::string_view text, size_t& pos);
+    static ErrorOr<Json> parse_value(std::string_view text, size_t& pos, int depth = 0);
 };
 
 } // namespace lkb

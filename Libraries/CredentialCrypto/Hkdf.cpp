@@ -12,27 +12,24 @@ constexpr size_t sha256_len = 32;
 
 }
 
-ErrorOr<ByteBuffer> hmac_sha256(ByteBuffer const& key, ByteBuffer const& data)
-{
+ErrorOr<ByteBuffer> hmac_sha256(ByteBuffer const& key, ByteBuffer const& data) {
     ByteBuffer out(sha256_len);
     unsigned int len = 0;
     if (!HMAC(EVP_sha256(), key.data(), static_cast<int>(key.size()), data.data(), data.size(),
-            out.data(), &len)
-        || len != sha256_len)
-        return ErrorOr<ByteBuffer>::error({ ErrorCode::Authentication, "hmac" });
+              out.data(), &len) ||
+        len != sha256_len)
+        return ErrorOr<ByteBuffer>::error({ErrorCode::Authentication, "hmac"});
     return ErrorOr<ByteBuffer>::ok(std::move(out));
 }
 
-static ErrorOr<ByteBuffer> hmac_bytes(ByteBuffer const& key, ByteBuffer const& data)
-{
+static ErrorOr<ByteBuffer> hmac_bytes(ByteBuffer const& key, ByteBuffer const& data) {
     return hmac_sha256(key, data);
 }
 
 ErrorOr<ByteBuffer> hkdf_sha256(ByteBuffer const& ikm, ByteBuffer const& salt,
-    ByteBuffer const& info, size_t length)
-{
+                                ByteBuffer const& info, size_t length) {
     if (length > 255 * sha256_len)
-        return ErrorOr<ByteBuffer>::error({ ErrorCode::Invalid, "hkdf length" });
+        return ErrorOr<ByteBuffer>::error({ErrorCode::Invalid, "hkdf length"});
 
     // extract
     ByteBuffer zero_salt(sha256_len, 0);
@@ -59,4 +56,4 @@ ErrorOr<ByteBuffer> hkdf_sha256(ByteBuffer const& ikm, ByteBuffer const& salt,
     return ErrorOr<ByteBuffer>::ok(std::move(okm));
 }
 
-}
+} // namespace lkb

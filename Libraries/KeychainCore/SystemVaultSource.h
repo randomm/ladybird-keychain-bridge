@@ -28,7 +28,15 @@ struct VaultCapabilities {
 // user items are never addressed.
 class SystemVaultSource {
   public:
-    explicit SystemVaultSource(KeychainBackend& backend) : m_backend(backend) {}
+    // The probe WRITES AND DELETES through the backend. Wiring it to the same
+    // backend that holds the real master key would overwrite and delete it, so
+    // probe() only runs when the caller explicitly declares the backend a
+    // dedicated probe store (its own service/account/keychain file).
+    enum class DedicatedProbe { No, Yes };
+
+    explicit SystemVaultSource(KeychainBackend& backend,
+                               DedicatedProbe dedicated = DedicatedProbe::No)
+        : m_backend(backend), m_dedicated(dedicated == DedicatedProbe::Yes) {}
 
     VaultCapabilities probe();
 
@@ -41,6 +49,7 @@ class SystemVaultSource {
     void audit(std::string operation, std::string status);
 
     KeychainBackend& m_backend;
+    bool m_dedicated{false};
     std::vector<ProbeAuditEntry> m_audit;
 };
 

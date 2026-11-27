@@ -206,6 +206,44 @@ int main() {
             EXPECT(recs.value()[0].created > 0);
     }
 
+    // Review fix (oversized quoted field): the 1 MiB field cap must bind inside
+    // quotes too — the unquoted-only check was a bypass.
+    {
+        std::string huge = "Title,Username,Password,URL\nx,alice,\"";
+        huge.append((1 << 20) + 1, 'a');
+        huge += "\",https://q.example/\n";
+        ByteBuffer b(huge.begin(), huge.end());
+        wipe_db();
+        auto v = VaultStore::open(path, key());
+        auto res = import_csv(b, v.value());
+        EXPECT(res.is_error());
+        if (res.is_error())
+            EXPECT_EQ(static_cast<int>(res.error().code), static_cast<int>(ErrorCode::TooLarge));
+    }
+
+    // Review fix (scheme policy at the import boundary): plain-http rows never
+    // enter the vault; they are skipped and counted, not silently persisted.
+    // https and the localhost-explicit-port opt-in still import.
+    {
+        std::string csv = "Title,Username,Password,URL\n"
+                          "t1,alice,pw1,https://ok.example/\n"
+                          "t2,bob,pw2,http://evil.example/\n"
+                          "t3,carol,pw3,http://localhost:8443/\n";
+        ByteBuffer b(csv.begin(), csv.end());
+        wipe_db();
+        auto v = VaultStore::open(path, key());
+        size_t skipped = 999;
+        auto res = import_csv(b, v.value(), &skipped);
+        EXPECT(!res.is_error());
+        if (!res.is_error())
+            EXPECT_EQ(res.value(), static_cast<size_t>(2));
+        EXPECT_EQ(skipped, static_cast<size_t>(1));
+        size_t und = 0;
+        auto recs = v.value().all(und);
+        for (auto& r : recs.value())
+            EXPECT(r.origin.scheme == "https" || r.origin.is_local_opt_in());
+    }
+
     wipe_db();
     return ::lkb::failures();
 }

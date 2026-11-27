@@ -4,13 +4,11 @@
 
 namespace lkb {
 
-static Error invalid(std::string what)
-{
-    return Error { ErrorCode::InvalidOrigin, std::move(what) };
+static Error invalid(std::string what) {
+    return Error{ErrorCode::InvalidOrigin, std::move(what)};
 }
 
-ErrorOr<Origin> Origin::parse(std::string_view url)
-{
+ErrorOr<Origin> Origin::parse(std::string_view url) {
     for (char c : url) {
         if (c == '@' || c == '#' || c == '?')
             return ErrorOr<Origin>::error(invalid("userinfo/query/fragment not allowed"));
@@ -32,7 +30,7 @@ ErrorOr<Origin> Origin::parse(std::string_view url)
     if (authority.empty())
         return ErrorOr<Origin>::error(invalid("empty host"));
 
-    std::string host { authority };
+    std::string host{authority};
     std::uint16_t port = (scheme == "https") ? 443 : 80;
     bool explicit_port = false;
 
@@ -55,13 +53,39 @@ ErrorOr<Origin> Origin::parse(std::string_view url)
 
     for (char& c : host)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (host.empty())
-        return ErrorOr<Origin>::error(invalid("empty host"));
-    for (char c : host) {
-        bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_';
-        if (!ok)
-            return ErrorOr<Origin>::error(invalid("invalid host character"));
+    if (host.empty() || host.size() > 253)
+        return ErrorOr<Origin>::error(invalid("bad host length"));
+
+    // Review fix (host laxness): labels must be well-formed — non-empty, capped,
+    // hyphens never at the edges. Underscores stay allowed (service records).
+    {
+        size_t label_start = 0;
+        while (label_start <= host.size()) {
+            size_t dot = host.find('.', label_start);
+            size_t label_end = (dot == std::string::npos) ? host.size() : dot;
+            size_t len = label_end - label_start;
+            if (len == 0 || len > 63)
+                return ErrorOr<Origin>::error(invalid("bad host label"));
+            char first = host[label_start];
+            char last = host[label_end - 1];
+            if (first == '-' || last == '-')
+                return ErrorOr<Origin>::error(invalid("host label hyphen"));
+            for (size_t i = label_start; i < label_end; ++i) {
+                char c = host[i];
+                bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+                if (!ok)
+                    return ErrorOr<Origin>::error(invalid("invalid host character"));
+            }
+            if (dot == std::string::npos)
+                break;
+            label_start = dot + 1;
+        }
     }
+
+    // Review fix (http opt-in bypass): a port spelled out that equals the scheme
+    // default is not an explicit port — it must not carry the localhost opt-in.
+    bool default_port = (scheme == "https" && port == 443) || (scheme == "http" && port == 80);
+    explicit_port = explicit_port && !default_port;
 
     Origin origin;
     origin.scheme = std::move(scheme);
@@ -71,8 +95,7 @@ ErrorOr<Origin> Origin::parse(std::string_view url)
     return ErrorOr<Origin>::ok(std::move(origin));
 }
 
-std::string Origin::serialize() const
-{
+std::string Origin::serialize() const {
     std::string out = scheme + "://" + host;
     bool default_port = (scheme == "https" && port == 443) || (scheme == "http" && port == 80);
     if (has_explicit_port && !default_port)
@@ -80,4 +103,4 @@ std::string Origin::serialize() const
     return out;
 }
 
-}
+} // namespace lkb

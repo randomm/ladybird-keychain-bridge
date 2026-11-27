@@ -4,8 +4,7 @@
 
 using namespace lkb;
 
-int main()
-{
+int main() {
     // 1. create-on-first-use with injected RNG; second call reads the stored key.
     {
         FakeKeychainBackend fake;
@@ -31,7 +30,8 @@ int main()
         auto r = master_key_or_create(fake, rng);
         EXPECT(r.is_error());
         if (r.is_error())
-            EXPECT_EQ(static_cast<int>(r.error().code), static_cast<int>(ErrorCode::InteractionNotAllowed));
+            EXPECT_EQ(static_cast<int>(r.error().code),
+                      static_cast<int>(ErrorCode::InteractionNotAllowed));
         EXPECT_EQ(fake.read_count(), 1); // no silent retry
     }
 
@@ -43,7 +43,8 @@ int main()
         auto r = master_key_or_create(fake, rng);
         EXPECT(r.is_error());
         if (r.is_error())
-            EXPECT_EQ(static_cast<int>(r.error().code), static_cast<int>(ErrorCode::UnexpectedData));
+            EXPECT_EQ(static_cast<int>(r.error().code),
+                      static_cast<int>(ErrorCode::UnexpectedData));
     }
 
     // 4. backend unavailable -> typed failure, creation not attempted.

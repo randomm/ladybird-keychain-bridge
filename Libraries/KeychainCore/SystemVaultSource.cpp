@@ -9,7 +9,7 @@
 namespace lkb {
 
 void SystemVaultSource::audit(std::string operation, std::string status) {
-    m_audit.push_back({move(operation), move(status)});
+    m_audit.push_back({std::move(operation), std::move(status)});
 }
 
 ByteBuffer SystemVaultSource::probe_key() {
@@ -26,6 +26,11 @@ ByteBuffer SystemVaultSource::probe_key() {
 
 VaultCapabilities SystemVaultSource::probe() {
     VaultCapabilities caps;
+
+    if (!m_dedicated) {
+        audit("probe", "refused"); // misuse guard: never write/delete through an undeclared backend
+        return caps;
+    }
 
     if (!m_backend.is_available()) {
         audit("probe", "unavailable");

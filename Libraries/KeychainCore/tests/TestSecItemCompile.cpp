@@ -3,8 +3,7 @@
 #include "SecItemKeychainBackend.h"
 #include "testing/TestAssert.h"
 
-int main()
-{
+int main() {
     EXPECT(sizeof(lkb::SecItemKeychainBackend) > 0);
     // Reference the factory symbol without invoking any keychain path.
     EXPECT(lkb::SecItemKeychainBackend::create != nullptr);

@@ -8,8 +8,7 @@
 #include <cstring>
 #include <string>
 
-int main(int argc, char** argv)
-{
+int main(int argc, char** argv) {
     std::string keychain_path;
     std::string service = "Ladybird Safe Storage Smoke";
     std::string account = "Ladybird Smoke";

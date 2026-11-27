@@ -1,8 +1,21 @@
 #include "CredentialService.h"
 
+#include "CsvBridge.h"
+
 #include <openssl/rand.h>
 
 namespace lkb {
+
+namespace {
+
+// Never-break rule, enforced on EVERY read path (review fix): plain http is
+// served only as the literal-localhost explicit-port opt-in. Storage stays
+// policy-free so this single gate cannot be raced by a future entry point.
+bool origin_served(Origin const& origin) {
+    return origin.scheme != "http" || origin.is_local_opt_in();
+}
+
+} // namespace
 
 void CredentialService::audit(std::string event, Origin const& origin, std::size_t length) {
     m_audit.push_back({std::move(event), origin.serialize(), length});
@@ -78,6 +91,12 @@ CredentialService::lookup_for_origin(Origin const& origin, std::optional<std::st
     if (m_clock.now() - it->second.second > CapabilityToken::ttl_seconds)
         return ErrorOr<std::vector<Match>>::error({ErrorCode::Unauthorized, "page token expired"});
 
+    // Review fix: autofill lookups honor the scheme policy too, whatever path
+    // the record took into the vault.
+    if (!origin_served(origin))
+        return ErrorOr<std::vector<Match>>::error(
+            {ErrorCode::Unauthorized, "plain-http origin not served"});
+
     return m_vault.find(origin, hint);
 }
 
@@ -98,19 +117,24 @@ void CredentialService::revoke_page_token(std::uint64_t token) {
     m_page_tokens.erase(token);
 }
 
-ErrorOr<void> CredentialService::delete_credential(std::int64_t id, CapabilityToken const& token) {
-    if (!token.valid())
-        return ErrorOr<void>::error({ErrorCode::Unauthorized, "capability required"});
+ErrorOr<void> CredentialService::delete_credential(std::int64_t id, CapabilityToken& token) {
+    if (!token.consume())
+        return ErrorOr<void>::error({ErrorCode::Unauthorized, "capability required or used"});
+    // Review fix: the audit event names the record's origin (it was an empty
+    // string); origin lookup happens before the removal.
+    auto origin = m_vault.origin_of_id(id);
+    if (origin.is_error())
+        return ErrorOr<void>::error(origin.error());
     auto rm = m_vault.remove_credential(id);
     if (rm.is_error())
         return rm;
-    m_audit.push_back({"delete", "", 0});
+    audit("delete", origin.value(), 0);
     return ErrorOr<void>::ok();
 }
 
-ErrorOr<void> CredentialService::delete_bulk(Origin const& origin, CapabilityToken const& token) {
-    if (!token.valid())
-        return ErrorOr<void>::error({ErrorCode::Unauthorized, "capability required"});
+ErrorOr<void> CredentialService::delete_bulk(Origin const& origin, CapabilityToken& token) {
+    if (!token.consume())
+        return ErrorOr<void>::error({ErrorCode::Unauthorized, "capability required or used"});
     auto rm = m_vault.remove_origin(origin);
     if (rm.is_error())
         return rm;
@@ -118,10 +142,10 @@ ErrorOr<void> CredentialService::delete_bulk(Origin const& origin, CapabilityTok
     return ErrorOr<void>::ok();
 }
 
-ErrorOr<std::vector<CredentialRecord>> CredentialService::list(CapabilityToken const& token) {
-    if (!token.valid())
+ErrorOr<std::vector<CredentialRecord>> CredentialService::list(CapabilityToken& token) {
+    if (!token.consume())
         return ErrorOr<std::vector<CredentialRecord>>::error(
-            {ErrorCode::Unauthorized, "capability required"});
+            {ErrorCode::Unauthorized, "capability required or used"});
     size_t undecodable = 0;
     auto all = m_vault.all(undecodable);
     if (all.is_error())
@@ -129,6 +153,26 @@ ErrorOr<std::vector<CredentialRecord>> CredentialService::list(CapabilityToken c
     if (undecodable > 0)
         m_audit.push_back({"undecodable-count", "", undecodable});
     return all;
+}
+
+// CSV admin surfaces (AGENTS.md): fail closed without a live, unconsumed token.
+ErrorOr<std::size_t> CredentialService::import_csv(ByteBuffer const& csv, CapabilityToken& token) {
+    if (!token.consume())
+        return ErrorOr<std::size_t>::error(
+            {ErrorCode::Unauthorized, "capability required or used"});
+    size_t skipped = 0;
+    auto imported = lkb::import_csv(csv, m_vault, &skipped);
+    if (imported.is_error())
+        return imported;
+    if (skipped > 0)
+        m_audit.push_back({"import-skipped", "", skipped});
+    return imported;
+}
+
+ErrorOr<ByteBuffer> CredentialService::export_csv(CapabilityToken& token) {
+    if (!token.consume())
+        return ErrorOr<ByteBuffer>::error({ErrorCode::Unauthorized, "capability required or used"});
+    return lkb::export_csv(m_vault);
 }
 
 ErrorOr<void> CredentialService::on_prompt_result(SaveRequest const& request,
@@ -161,11 +205,12 @@ ErrorOr<void> CredentialService::mark_never(Origin const& origin) {
     return ErrorOr<void>::ok();
 }
 
-Capabilities CredentialService::capabilities() const {
-    return Capabilities{};
-}
-
 ErrorOr<std::optional<Match>> CredentialService::js_get(Origin const& origin, bool allow_silent) {
+    // Review fix: same scheme gate as every other read path.
+    if (!origin_served(origin))
+        return ErrorOr<std::optional<Match>>::error(
+            {ErrorCode::Unauthorized, "plain-http origin not served"});
+
     auto it = m_prevent_silent.find(origin.serialize());
     if (!allow_silent && it != m_prevent_silent.end() && it->second)
         return ErrorOr<std::optional<Match>>::error(

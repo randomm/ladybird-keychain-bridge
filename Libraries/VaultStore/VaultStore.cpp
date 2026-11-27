@@ -376,6 +376,29 @@ ErrorOr<void> VaultStore::remove_credential(std::int64_t id) {
     return ErrorOr<void>::ok();
 }
 
+ErrorOr<Origin> VaultStore::origin_of_id(std::int64_t id) {
+    // Plaintext identity columns only — no blob, no decryption.
+    sqlite3_stmt* stmt =
+        prepare_or_null(m_db, "SELECT scheme, host, port FROM credentials WHERE id=?;");
+    if (!stmt)
+        return ErrorOr<Origin>::error(db_error("prepare origin_of_id"));
+    sqlite3_bind_int64(stmt, 1, id);
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        return ErrorOr<Origin>::error({ErrorCode::NotFound, "no such credential"});
+    }
+    Origin origin;
+    origin.scheme = reinterpret_cast<char const*>(sqlite3_column_text(stmt, 0));
+    origin.host = reinterpret_cast<char const*>(sqlite3_column_text(stmt, 1));
+    origin.port = static_cast<std::uint16_t>(sqlite3_column_int(stmt, 2));
+    sqlite3_finalize(stmt);
+    bool default_port = (origin.scheme == "https" && origin.port == 443) ||
+                        (origin.scheme == "http" && origin.port == 80);
+    origin.has_explicit_port = !default_port;
+    return ErrorOr<Origin>::ok(std::move(origin));
+}
+
 ErrorOr<std::vector<CredentialRecord>> VaultStore::all(size_t& out_undecodable) {
     out_undecodable = 0;
     sqlite3_stmt* stmt = prepare_or_null(

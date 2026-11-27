@@ -4,6 +4,7 @@
 #include "SecItemKeychainBackend.h"
 
 #include <cstdio>
+#include <unistd.h> // access()
 
 namespace lkb {
 
@@ -46,6 +47,16 @@ SecItemKeychainBackend::create(std::string service, std::string account,
     backend.m_account = std::move(account);
 
     if (keychain_path) {
+        // The dedicated-keychain promise is only kept if SecItemAdd can never
+        // silently fall back to the default search list. Two empirical traps on
+        // Darwin 27: a nonexistent path makes SecItemAdd store into the login
+        // keychain, and a path naming the login keychain is plainly forbidden.
+        if (keychain_path->find("login.keychain") != std::string::npos)
+            return ErrorOr<SecItemKeychainBackend>::error(
+                {ErrorCode::IO, "the backend never addresses the login keychain"});
+        if (access(keychain_path->c_str(), F_OK) != 0)
+            return ErrorOr<SecItemKeychainBackend>::error(
+                {ErrorCode::IO, "dedicated keychain file does not exist (create it first)"});
         SecKeychainRef kc = nullptr;
         OSStatus status = SecKeychainOpen(keychain_path->c_str(), &kc);
         if (status != noErr || !kc)
@@ -142,6 +153,17 @@ ErrorOr<void> SecItemKeychainBackend::write_master_key(ByteBuffer const& key, Ac
 
     OSStatus status = SecItemUpdate(match, update);
     if (status == errSecItemNotFound) {
+        // Did an item with this identity already exist outside the dedicated
+        // keychain? Only an add we caused may be undone below.
+        bool foreign_preexisting = false;
+        if (m_keychain) {
+            CFMutableDictionaryRef pre = CFDictionaryCreateMutable(
+                nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+            fill_base(pre, m_service, m_account);
+            CFDictionarySetValue(pre, kSecMatchLimit, kSecMatchLimitOne);
+            foreign_preexisting = SecItemCopyMatching(pre, nullptr) == noErr;
+            CFRelease(pre);
+        }
         CFMutableDictionaryRef add = CFDictionaryCreateMutable(
             nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         fill_base(add, m_service, m_account);
@@ -151,6 +173,37 @@ ErrorOr<void> SecItemKeychainBackend::write_master_key(ByteBuffer const& key, Ac
         CFDictionarySetValue(add, kSecAttrAccessible, kSecAttrAccessibleWhenUnlocked);
         status = SecItemAdd(add, nullptr);
         CFRelease(add);
+        // Belt and braces: SecItemAdd can report noErr while storing into the
+        // default search list (observed with an unusable kSecUseKeychain). If
+        // the item is not visible in the scoped search list, the add landed
+        // somewhere else — undo it and fail closed rather than trust fallback.
+        if (status == noErr && m_keychain) {
+            CFMutableDictionaryRef check = CFDictionaryCreateMutable(
+                nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+            fill_base(check, m_service, m_account);
+            scope_to_keychain(check, m_keychain);
+            CFDictionarySetValue(check, kSecReturnData, kCFBooleanTrue);
+            CFDictionarySetValue(check, kSecMatchLimit, kSecMatchLimitOne);
+            CFTypeRef seen = nullptr;
+            OSStatus visible = SecItemCopyMatching(check, &seen);
+            if (seen)
+                CFRelease(seen);
+            CFRelease(check);
+            if (visible != noErr) {
+                // Never delete an item that existed before our add: undo only
+                // what this call can prove it caused.
+                if (!foreign_preexisting) {
+                    CFMutableDictionaryRef undo =
+                        CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks,
+                                                  &kCFTypeDictionaryValueCallBacks);
+                    fill_base(undo, m_service, m_account);
+                    SecItemDelete(undo); // unscoped: remove wherever it actually landed
+                    CFRelease(undo);
+                }
+                return ErrorOr<void>::error(
+                    {ErrorCode::IO, "SecItemAdd fell back to the default keychain — refused"});
+            }
+        }
     }
     CFRelease(update);
     CFRelease(data);

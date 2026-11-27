@@ -2,8 +2,7 @@
 #include "Origin.h"
 #include "testing/TestAssert.h"
 
-int main()
-{
+int main() {
     auto a = lkb::Origin::parse("HTTPS://Example.COM:443/");
     EXPECT(!a.is_error());
     if (!a.is_error()) {
@@ -20,7 +19,8 @@ int main()
     auto d = lkb::Origin::parse("https://u:p@x/y#z");
     EXPECT(d.is_error());
     if (d.is_error())
-        EXPECT_EQ(static_cast<int>(d.error().code), static_cast<int>(lkb::ErrorCode::InvalidOrigin));
+        EXPECT_EQ(static_cast<int>(d.error().code),
+                  static_cast<int>(lkb::ErrorCode::InvalidOrigin));
 
     auto l = lkb::Origin::parse("http://localhost:8080");
     EXPECT(!l.is_error());
@@ -47,6 +47,39 @@ int main()
     auto p8080 = lkb::Origin::parse("http://localhost:8080");
     auto p8081 = lkb::Origin::parse("http://localhost:8081");
     EXPECT(!p8080.value().equal(p8081.value()));
+
+    // Review fix (http opt-in bypass): an explicit port that equals the scheme
+    // default is canonicalized to "no explicit port" — http://localhost:80 must
+    // never sneak past the explicit-port rule by matching a port-less lookup.
+    {
+        auto e80 = lkb::Origin::parse("http://localhost:80");
+        EXPECT(!e80.is_error());
+        if (!e80.is_error()) {
+            EXPECT(!e80.value().is_local_opt_in());
+            EXPECT(!e80.value().has_explicit_port);
+            auto plain = lkb::Origin::parse("http://localhost");
+            EXPECT(e80.value().equal(plain.value()));
+        }
+        auto e443 = lkb::Origin::parse("https://x.example:443");
+        EXPECT(!e443.is_error());
+        if (!e443.is_error())
+            EXPECT(!e443.value().has_explicit_port);
+    }
+
+    // Review fix (host laxness): degenerate hosts are rejected.
+    {
+        EXPECT(lkb::Origin::parse("https://a..b").is_error()); // empty label
+        EXPECT(lkb::Origin::parse("https://.x").is_error());   // leading dot
+        EXPECT(lkb::Origin::parse("https://x.").is_error());   // trailing dot
+        EXPECT(lkb::Origin::parse("https://-x").is_error());   // label starts with hyphen
+        EXPECT(lkb::Origin::parse("https://x-").is_error());   // label ends with hyphen
+        EXPECT(lkb::Origin::parse("https://x..y:8080").is_error());
+        std::string long_label(64, 'a');
+        EXPECT(lkb::Origin::parse("https://" + long_label + ".example").is_error());
+        std::string long_host(254, 'a');
+        EXPECT(lkb::Origin::parse("https://" + long_host).is_error());
+        EXPECT(!lkb::Origin::parse("https://_dmarc.example").is_error()); // underscore ok
+    }
 
     return ::lkb::failures();
 }

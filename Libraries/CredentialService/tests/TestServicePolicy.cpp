@@ -184,11 +184,105 @@ int main() {
         EXPECT(has_event);
     }
 
-    // capabilities snapshot
+    // Review fix: capabilities fail closed until the integrator feeds them
+    // from the SystemVaultSource probe matrix (no hardcoded all-true lie).
     {
         auto caps = service.capabilities();
-        EXPECT(caps.save_enabled);
-        EXPECT(caps.autofill_enabled);
+        EXPECT(!caps.save_enabled);
+        EXPECT(!caps.autofill_enabled);
+        EXPECT(!caps.keychain_available);
+        Capabilities on;
+        on.save_enabled = on.autofill_enabled = on.keychain_available = true;
+        service.set_capabilities(on);
+        auto fed = service.capabilities();
+        EXPECT(fed.save_enabled);
+        EXPECT(fed.autofill_enabled);
+        EXPECT(fed.keychain_available);
+    }
+
+    // Review fix: the admin capability is single-use — a captured token cannot
+    // be replayed for a second admin call inside its TTL window.
+    {
+        auto t = CapabilityToken::mint(auth, clock);
+        EXPECT(!t.is_error());
+        auto first = service.list(t.value());
+        EXPECT(!first.is_error());
+        auto second = service.list(t.value());
+        EXPECT(second.is_error());
+        if (second.is_error())
+            EXPECT_EQ(static_cast<int>(second.error().code),
+                      static_cast<int>(ErrorCode::Unauthorized));
+    }
+
+    // Review fix: read paths enforce the same https-or-localhost-explicit-port
+    // rule as the save path, so a row smuggled in through any future entry
+    // point still never answers a plain-http caller.
+    {
+        auto& vault = opened.value();
+        CredentialRecord smuggled;
+        smuggled.origin = origin_of("http://evil.example");
+        smuggled.username = "mallory";
+        std::string sec = "leaked-attempt";
+        smuggled.secret = ByteBuffer(sec.begin(), sec.end());
+        EXPECT(!vault.put(smuggled).is_error()); // storage itself is policy-free
+
+        auto pt = service.issue_page_token(origin_of("http://evil.example"));
+        EXPECT(!pt.is_error());
+        auto denied =
+            service.lookup_for_origin(origin_of("http://evil.example"), std::nullopt, pt.value());
+        EXPECT(denied.is_error());
+        if (denied.is_error())
+            EXPECT_EQ(static_cast<int>(denied.error().code),
+                      static_cast<int>(ErrorCode::Unauthorized));
+
+        auto js_denied = service.js_get(origin_of("http://evil.example"), true);
+        EXPECT(js_denied.is_error());
+
+        auto ok_local = service.js_get(origin_of("http://localhost:8443"), true);
+        EXPECT(!ok_local.is_error()); // opt-in origin answers (empty, not error)
+        if (!ok_local.is_error())
+            EXPECT(!ok_local.value().has_value());
+    }
+
+    // Review fix: the delete audit event names the record's origin (delete_bulk
+    // already did; delete_credential logged an empty string).
+    {
+        auto& vault = opened.value();
+        auto rows = vault.find(origin_of("https://login.example"), std::nullopt);
+        EXPECT(!rows.is_error());
+        EXPECT(!rows.value().empty());
+        if (!rows.value().empty()) {
+            auto id = rows.value()[0].id;
+            auto t = CapabilityToken::mint(auth, clock);
+            EXPECT(!t.is_error());
+            auto del = service.delete_credential(id, t.value());
+            EXPECT(!del.is_error());
+            bool found = false;
+            for (auto& ev : service.audit_log()) {
+                if (ev.event == "delete" && ev.origin == "https://login.example")
+                    found = true;
+            }
+            EXPECT(found);
+        }
+    }
+
+    // Review fix: CSV import/export are admin surfaces — gated by a live token
+    // at the service boundary (fail closed).
+    {
+        auto expired = CapabilityToken::mint(auth, clock);
+        EXPECT(!expired.is_error());
+        expired.value().revoke();
+        auto bad = service.import_csv(ByteBuffer(), expired.value());
+        EXPECT(bad.is_error());
+        auto bad_out = service.export_csv(expired.value());
+        EXPECT(bad_out.is_error());
+        if (bad_out.is_error())
+            EXPECT_EQ(static_cast<int>(bad_out.error().code),
+                      static_cast<int>(ErrorCode::Unauthorized));
+
+        auto good = CapabilityToken::mint(auth, clock);
+        auto exp = service.export_csv(good.value());
+        EXPECT(!exp.is_error());
     }
 
     std::remove(path);

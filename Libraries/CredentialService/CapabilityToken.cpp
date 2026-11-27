@@ -36,4 +36,11 @@ bool CapabilityToken::valid() const {
     return age >= 0 && age <= ttl_seconds;
 }
 
+bool CapabilityToken::consume() {
+    if (!valid() || m_used)
+        return false;
+    m_used = true;
+    return true;
+}
+
 } // namespace lkb

@@ -56,7 +56,7 @@ class NoDeleteBackend final : public lkb::KeychainBackend {
 bool audit_is_only_tokens(std::vector<lkb::ProbeAuditEntry> const& entries) {
     static std::set<std::string> const operations{"probe", "save", "read", "update", "delete"};
     static std::set<std::string> const statuses{
-        "ok", "unavailable", "mismatch", "still-present", "not-found", "error"};
+        "ok", "unavailable", "mismatch", "still-present", "not-found", "error", "refused"};
     for (auto const& e : entries) {
         if (!operations.count(e.operation) || !statuses.count(e.status))
             return false;
@@ -71,7 +71,7 @@ int main() {
     {
         lkb::FakeKeychainBackend fake;
         fake.set_available(false);
-        lkb::SystemVaultSource source{fake};
+        lkb::SystemVaultSource source{fake, lkb::SystemVaultSource::DedicatedProbe::Yes};
         auto caps = source.probe();
         CHECK(!caps.keychain_available);
         CHECK(!caps.save_read_roundtrip);
@@ -84,7 +84,7 @@ int main() {
     // 2. Healthy backend: every capability verified by a real roundtrip.
     {
         lkb::FakeKeychainBackend fake;
-        lkb::SystemVaultSource source{fake};
+        lkb::SystemVaultSource source{fake, lkb::SystemVaultSource::DedicatedProbe::Yes};
         auto caps = source.probe();
         CHECK(caps.keychain_available);
         CHECK(caps.save_read_roundtrip);
@@ -99,7 +99,7 @@ int main() {
     // 3. A vault that lies about persistence fails the roundtrip check.
     {
         LyingBackend lying;
-        lkb::SystemVaultSource source{lying};
+        lkb::SystemVaultSource source{lying, lkb::SystemVaultSource::DedicatedProbe::Yes};
         auto caps = source.probe();
         CHECK(caps.keychain_available);
         CHECK(!caps.save_read_roundtrip);
@@ -109,7 +109,7 @@ int main() {
     // 4. A delete that leaves the item behind is reported, not believed.
     {
         NoDeleteBackend sticky;
-        lkb::SystemVaultSource source{sticky};
+        lkb::SystemVaultSource source{sticky, lkb::SystemVaultSource::DedicatedProbe::Yes};
         auto caps = source.probe();
         CHECK(!caps.delete_item);
         CHECK(audit_is_only_tokens(source.audit()));
@@ -119,7 +119,7 @@ int main() {
     //    and the serialized audit contains no byte of the probe key.
     {
         lkb::FakeKeychainBackend fake;
-        lkb::SystemVaultSource source{fake};
+        lkb::SystemVaultSource source{fake, lkb::SystemVaultSource::DedicatedProbe::Yes};
         auto key = lkb::SystemVaultSource::probe_key();
         CHECK(key.size() == 32);
         (void)source.probe();
@@ -130,6 +130,22 @@ int main() {
         for (auto byte : key)
             key_as_text += static_cast<char>(byte);
         CHECK(serialized.find(key_as_text) == std::string::npos);
+    }
+
+    // 6. Misuse guard: a probe pointed at a backend the caller did not declare
+    //    dedicated refuses to write/delete through it — wiring probe() to the
+    //    production master-key backend must never destroy the real key.
+    {
+        lkb::FakeKeychainBackend fake;
+        lkb::SystemVaultSource source{fake}; // default: NOT dedicated
+        auto caps = source.probe();
+        CHECK(!caps.keychain_available);
+        CHECK(!caps.save_read_roundtrip);
+        CHECK(fake.write_count() == 0);
+        CHECK(fake.delete_count() == 0);
+        CHECK(source.audit().size() == 1);
+        CHECK(source.audit()[0].operation == "probe");
+        CHECK(source.audit()[0].status == "refused");
     }
 
     if (s_failures == 0) {

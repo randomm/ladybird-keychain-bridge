@@ -11,18 +11,16 @@ namespace lkb {
 // Exact-origin identity: scheme (http|https) + casefolded ASCII host + port with
 // default stripping. userinfo, query and fragment are rejected — they are not origins.
 class Origin {
-public:
+  public:
     static ErrorOr<Origin> parse(std::string_view url);
 
-    bool equal(Origin const& other) const
-    {
+    bool equal(Origin const& other) const {
         return scheme == other.scheme && host == other.host && port == other.port;
     }
 
     // http origins are usable ONLY for literal localhost with an explicit port
     // (owner-visible opt-in rule; https always allowed).
-    bool is_local_opt_in() const
-    {
+    bool is_local_opt_in() const {
         return scheme == "http" && host == "localhost" && has_explicit_port;
     }
 
@@ -30,8 +28,8 @@ public:
 
     std::string scheme;
     std::string host;
-    std::uint16_t port { 0 };
-    bool has_explicit_port { false };
+    std::uint16_t port{0};
+    bool has_explicit_port{false};
 };
 
-}
+} // namespace lkb

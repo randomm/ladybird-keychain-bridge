@@ -15,6 +15,8 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <set>
 #include <vector>
 
 namespace lkb {
@@ -266,8 +268,56 @@ Handshake::start_client(std::string caller_bundle_id, std::string priv_hex, std:
     return ErrorOr<ClientStart>::ok(std::move(start));
 }
 
+namespace {
+
+std::mutex g_nonce_mutex;
+std::set<std::string> g_seen_nonces;
+
+bool valid_nonce_hex(std::string const& s) {
+    if (s.empty() || s.size() > 128 || s.size() % 2 != 0)
+        return false;
+    for (char c : s) {
+        if (!std::isxdigit(static_cast<unsigned char>(c)))
+            return false;
+    }
+    return true;
+}
+
+void const_time_xor(ByteBuffer const& a, ByteBuffer const& b, bool& mismatch) {
+    if (a.size() != b.size()) {
+        mismatch = true;
+        return;
+    }
+    std::uint8_t acc = 0;
+    for (size_t i = 0; i < a.size(); ++i)
+        acc = static_cast<std::uint8_t>(acc ^ (a[i] ^ b[i]));
+    if (acc != 0)
+        mismatch = true;
+}
+
+} // namespace
+
 ErrorOr<Handshake::ServerSide>
 Handshake::accept_hello(HelloMsg const& hello, std::string peer_identity, std::string priv_hex) {
+    // Review fixes: proto_version is a real gate (a version-mismatched peer
+    // would silently corrupt every subsequent frame), hello nonces must be
+    // well-formed, and a replayed nonce against this listener is refused.
+    if (hello.proto_version != 1)
+        return ErrorOr<ServerSide>::error(hs_err("unsupported proto_version"));
+    if (!valid_nonce_hex(hello.nonce_hex))
+        return ErrorOr<ServerSide>::error(hs_err("malformed nonce"));
+    {
+        std::lock_guard<std::mutex> lock(g_nonce_mutex);
+        if (!g_seen_nonces.insert(hello.nonce_hex).second)
+            return ErrorOr<ServerSide>::error(hs_err("replayed nonce"));
+        if (g_seen_nonces.size() > 1024) {
+            // Bound the cache: replay protection is best-effort across the
+            // last 1024 hello nonces of this process.
+            g_seen_nonces.clear();
+            g_seen_nonces.insert(hello.nonce_hex);
+        }
+    }
+
     ServerSide server;
     if (priv_hex.empty()) {
         auto kp = generate_keypair();
@@ -315,6 +365,36 @@ ErrorOr<ByteBuffer> Handshake::complete_client(HelloMsg const& hello, HelloAck c
         return ErrorOr<ByteBuffer>::error(hs_err("transcript mismatch"));
 
     return session_key(hello, ack, shared.value());
+}
+
+ByteBuffer Handshake::confirmation_mac(ByteBuffer const& session_key, bool is_server,
+                                       std::string const& hello_canonical,
+                                       std::string const& ack_canonical) {
+    // Domain-separated by side: the server's confirmation differs from the
+    // client's for the same transcript, so neither side can replay the other.
+    std::string data = is_server ? "lkb-confirm-server:" : "lkb-confirm-client:";
+    data += hello_canonical;
+    data += "|";
+    data += ack_canonical;
+    ByteBuffer data_buf(data.begin(), data.end());
+    auto mac = hmac_sha256(session_key, data_buf);
+    if (mac.is_error())
+        return {};
+    return std::move(mac.value());
+}
+
+bool Handshake::verify_confirmation(ByteBuffer const& session_key, bool is_server,
+                                    std::string const& hello_canonical,
+                                    std::string const& ack_canonical, ByteBuffer const& mac) {
+    auto want = confirmation_mac(session_key, is_server, hello_canonical, ack_canonical);
+    bool mismatch = false;
+    const_time_xor(want, mac, mismatch);
+    return !mismatch;
+}
+
+void Handshake::reset_nonce_cache_for_tests() {
+    std::lock_guard<std::mutex> lock(g_nonce_mutex);
+    g_seen_nonces.clear();
 }
 
 } // namespace lkb

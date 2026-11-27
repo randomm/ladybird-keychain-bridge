@@ -49,6 +49,9 @@ ErrorOr<std::vector<CsvRow>> parse_csv(ByteBuffer const& input) {
             if (c == '"') {
                 if (i + 1 < input.size() && input[i + 1] == '"') {
                     field += '"';
+                    if (field.size() > csv_max_field_bytes)
+                        return ErrorOr<std::vector<CsvRow>>::error(
+                            csv_err("field too large", ErrorCode::TooLarge));
                     i += 2;
                     continue;
                 }
@@ -57,6 +60,11 @@ ErrorOr<std::vector<CsvRow>> parse_csv(ByteBuffer const& input) {
                 continue;
             }
             field += c;
+            // Review fix: the field cap must bind inside quotes too — the
+            // quoted branch was an unbounded-allocation bypass.
+            if (field.size() > csv_max_field_bytes)
+                return ErrorOr<std::vector<CsvRow>>::error(
+                    csv_err("field too large", ErrorCode::TooLarge));
             ++i;
         } else if (c == '"' && field.empty() && !field_started_quoted) {
             in_quotes = true;
@@ -155,13 +163,17 @@ bool is_canonical(std::string const& name) {
 
 } // namespace
 
-ErrorOr<size_t> import_csv(ByteBuffer const& csv, VaultStore& vault) {
+ErrorOr<size_t> import_csv(ByteBuffer const& csv, VaultStore& vault, size_t* skipped_out) {
+    size_t skipped = 0;
     auto rows = parse_csv(csv);
     if (rows.is_error())
         return ErrorOr<size_t>::error(rows.error());
     auto& data = rows.value();
-    if (data.empty())
+    if (data.empty()) {
+        if (skipped_out)
+            *skipped_out = 0;
         return ErrorOr<size_t>::ok(0);
+    }
     if (data.size() - 1 > csv_max_rows)
         return ErrorOr<size_t>::error(csv_err("row cap exceeded", ErrorCode::TooLarge));
 
@@ -207,11 +219,22 @@ ErrorOr<size_t> import_csv(ByteBuffer const& csv, VaultStore& vault) {
                 return {};
             return fields[static_cast<size_t>(col)];
         };
-        if (col_url < 0)
+        if (col_url < 0) {
+            ++skipped;
             continue;
+        }
         auto origin = Origin::parse(cell(col_url));
-        if (origin.is_error())
-            continue; // unparsable URL: row carries no credential target; extras still ignored
+        if (origin.is_error()) {
+            ++skipped; // unparsable URL: row carries no credential target
+            continue;
+        }
+        // Review fix: the never-break scheme rule binds at the import boundary
+        // too — real-world exports do contain plain-http rows, and an
+        // attacker-supplied CSV is a first-class input. Skipped, never stored.
+        if (origin.value().scheme == "http" && !origin.value().is_local_opt_in()) {
+            ++skipped;
+            continue;
+        }
 
         CredentialRecord record;
         record.origin = std::move(origin.value());
@@ -248,6 +271,8 @@ ErrorOr<size_t> import_csv(ByteBuffer const& csv, VaultStore& vault) {
             return ErrorOr<size_t>::error(put.error());
         ++imported;
     }
+    if (skipped_out)
+        *skipped_out = skipped;
     return ErrorOr<size_t>::ok(imported);
 }
 

@@ -3,6 +3,7 @@
 // without LKB_OWNER_RUN=1. Never touches user items.
 #include "SecItemKeychainBackend.h"
 #include "SystemVaultSource.h"
+#include "SystemVaultSourceProbe.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -47,7 +48,9 @@ int main(int argc, char** argv) {
     }
     auto backend = std::move(created.value());
 
-    lkb::SystemVaultSource source{backend};
+    // The probe owns a dedicated service/account in a dedicated keychain file —
+    // probe() refuses to run against anything else.
+    lkb::SystemVaultSource source{backend, lkb::SystemVaultSource::DedicatedProbe::Yes};
     auto caps = source.probe();
 
     std::printf("capabilities:\n");
@@ -62,6 +65,16 @@ int main(int argc, char** argv) {
     bool all_ok =
         caps.keychain_available && caps.save_read_roundtrip && caps.update && caps.delete_item;
 
+    // System-mediated surfaces (plan Task 16): presence/availability states —
+    // the signed matrix owns "available" (spec §7). Not part of the keychain
+    // pass/fail: ad-hoc builds legitimately report unvalidated_* everywhere.
+    auto as = lkb::probe_authorization_apis();
+    std::printf("authorization services (presence; signed matrix validates):\n");
+    std::printf("  password_provider: %s\n", lkb::to_string(as.password_provider));
+    std::printf("  passkey_manager:   %s\n", lkb::to_string(as.passkey_manager));
+    std::printf("  cxp_manager:       %s\n", lkb::to_string(as.cxp_manager));
+    std::printf("  delivered_codes:   %s\n", lkb::to_string(as.delivered_codes));
+
     if (!json_path.empty()) {
         // Capability matrix only — audit entries are {operation, status} tokens, never secrets.
         FILE* out = std::fopen(json_path.c_str(), "w");
@@ -75,6 +88,14 @@ int main(int argc, char** argv) {
                          caps.save_read_roundtrip ? "true" : "false");
             std::fprintf(out, "    \"update\": %s,\n", caps.update ? "true" : "false");
             std::fprintf(out, "    \"delete\": %s\n", caps.delete_item ? "true" : "false");
+            std::fprintf(out, "  },\n  \"authorization_services\": {\n");
+            std::fprintf(out, "    \"password_provider\": \"%s\",\n",
+                         lkb::to_string(as.password_provider));
+            std::fprintf(out, "    \"passkey_manager\": \"%s\",\n",
+                         lkb::to_string(as.passkey_manager));
+            std::fprintf(out, "    \"cxp_manager\": \"%s\",\n", lkb::to_string(as.cxp_manager));
+            std::fprintf(out, "    \"delivered_codes\": \"%s\"\n",
+                         lkb::to_string(as.delivered_codes));
             std::fprintf(out, "  },\n  \"audit\": [");
             for (size_t i = 0; i < source.audit().size(); ++i) {
                 auto const& e = source.audit()[i];

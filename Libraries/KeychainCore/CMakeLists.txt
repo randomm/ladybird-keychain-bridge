@@ -11,8 +11,8 @@ target_link_libraries(TestSystemVaultProbes PRIVATE lkb_keychain)
 add_test(NAME TestSystemVaultProbes COMMAND TestSystemVaultProbes)
 
 if(APPLE)
-    add_library(lkb_secitem STATIC SecItemKeychainBackend.mm)
-    target_link_libraries(lkb_secitem PUBLIC lkb_keychain "-framework Security" "-framework CoreFoundation")
+    add_library(lkb_secitem STATIC SecItemKeychainBackend.mm SystemVaultSourceProbe.mm)
+    target_link_libraries(lkb_secitem PUBLIC lkb_keychain "-framework Security" "-framework CoreFoundation" "-framework Foundation")
 
     add_executable(TestSecItemCompile tests/TestSecItemCompile.cpp)
     target_link_libraries(TestSecItemCompile PRIVATE lkb_secitem)

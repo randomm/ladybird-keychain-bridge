@@ -57,7 +57,9 @@ int main() {
     EXPECT(!sub.is_error());
     EXPECT(!sub.value().has_value());
 
-    // preventSilentAccess makes a non-silent get decline to answer
+    // preventSilentAccess blocks the SILENT caller (allow_silent=false): a page
+    // that asked for silent access after the user invoked preventSilentAccess()
+    // gets no answer. A mediated (non-silent) get keeps working.
     EXPECT(!service.set_prevent_silent_access(origin_of("https://app.example"), true).is_error());
     auto blocked = service.js_get(origin_of("https://app.example"), false);
     EXPECT(blocked.is_error());
@@ -65,10 +67,26 @@ int main() {
         EXPECT_EQ(static_cast<int>(blocked.error().code),
                   static_cast<int>(ErrorCode::Unauthorized));
 
-    // silent get still works after the flag (flag governs silent only)
-    auto silent_ok = service.js_get(origin_of("https://app.example"), true);
-    EXPECT(!silent_ok.is_error());
-    EXPECT(silent_ok.value().has_value());
+    auto mediated_ok = service.js_get(origin_of("https://app.example"), true);
+    EXPECT(!mediated_ok.is_error());
+    EXPECT(mediated_ok.value().has_value());
+
+    // Review fix: js_get enforces https-or-localhost-explicit-port even for
+    // rows placed in the vault by another path (import, migration, bug).
+    {
+        auto& vault = opened.value();
+        CredentialRecord smuggled;
+        smuggled.origin = origin_of("http://evil.example");
+        smuggled.username = "mallory";
+        std::string sec = "leaked-attempt";
+        smuggled.secret = ByteBuffer(sec.begin(), sec.end());
+        EXPECT(!vault.put(smuggled).is_error());
+        auto denied = service.js_get(origin_of("http://evil.example"), true);
+        EXPECT(denied.is_error());
+
+        auto localhost_ok = service.js_get(origin_of("http://localhost:8443"), true);
+        EXPECT(!localhost_ok.is_error());
+    }
 
     return ::lkb::failures();
 }

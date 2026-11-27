@@ -205,7 +205,11 @@ ErrorOr<HandshakeKeyPair> Handshake::keypair_from_private_hex(std::string const&
 
     // Derive the public point from the private scalar (EC_POINT_mul), then hand
     // OpenSSL a complete keypair. Deprecated EC APIs are the practical path for
-    // test-key injection without embedding pub in fixtures.
+    // test-key injection without embedding pub in fixtures. OpenSSL 3.x keeps
+    // these functional (with deprecation), and this scope is the only use; the
+    // live key agreement below is pure EVP.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     EC_KEY* ec = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
     if (!ec)
         return ErrorOr<HandshakeKeyPair>::error(hs_err("ec new"));
@@ -232,6 +236,7 @@ ErrorOr<HandshakeKeyPair> Handshake::keypair_from_private_hex(std::string const&
         EC_POINT_free(pub);
     if (d)
         BN_free(d);
+#pragma clang diagnostic pop
     if (!ok)
         return ErrorOr<HandshakeKeyPair>::error(hs_err("priv import"));
     return ErrorOr<HandshakeKeyPair>::ok(std::move(kp));

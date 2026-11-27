@@ -21,6 +21,9 @@ if(APPLE)
     add_executable(lkb-smoke tools/smoke_main.mm)
     target_link_libraries(lkb-smoke PRIVATE lkb_secitem)
 
-    add_executable(lkb-probe ${CMAKE_SOURCE_DIR}/Meta/Tools/lkb-probe.cpp)
+    # Relative to THIS file, not CMAKE_SOURCE_DIR: the tree is also embedded
+    # into the browser build via add_subdirectory (patch 0009), where the
+    # source dir is Ladybird's, not the bridge's.
+    add_executable(lkb-probe ${CMAKE_CURRENT_SOURCE_DIR}/../../Meta/Tools/lkb-probe.cpp)
     target_link_libraries(lkb-probe PRIVATE lkb_secitem)
 endif()

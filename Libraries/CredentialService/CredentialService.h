@@ -81,7 +81,6 @@ class CredentialService {
     std::vector<AuditEvent> m_audit;
     std::map<std::uint64_t, std::pair<Origin, std::int64_t>> m_page_tokens;
     std::map<std::string, bool> m_prevent_silent; // keyed by origin.serialize()
-    std::uint64_t m_next_page_token{1};
     Capabilities m_capabilities;
 };
 

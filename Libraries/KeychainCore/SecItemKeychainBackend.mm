@@ -58,7 +58,13 @@ SecItemKeychainBackend::create(std::string service, std::string account,
             return ErrorOr<SecItemKeychainBackend>::error(
                 {ErrorCode::IO, "dedicated keychain file does not exist (create it first)"});
         SecKeychainRef kc = nullptr;
+        // SecKeychainOpen is Apple's only API for addressing ONE keychain file
+        // (the dedicated-keychain isolation this backend exists for), so the
+        // deprecation is accepted here on purpose; the API remains functional.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         OSStatus status = SecKeychainOpen(keychain_path->c_str(), &kc);
+#pragma clang diagnostic pop
         if (status != noErr || !kc)
             return ErrorOr<SecItemKeychainBackend>::error(error_from(status, "SecKeychainOpen"));
         backend.m_keychain = kc; // retained by SecKeychainOpen's out param
@@ -89,8 +95,8 @@ SecItemKeychainBackend& SecItemKeychainBackend::operator=(SecItemKeychainBackend
     return *this;
 }
 
-void fill_base(CFMutableDictionaryRef query, std::string const& service_str,
-               std::string const& account_str) {
+static void fill_base(CFMutableDictionaryRef query, std::string const& service_str,
+                      std::string const& account_str) {
     CFStringRef service = cf(service_str);
     CFStringRef account = cf(account_str);
     CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword);
@@ -104,7 +110,7 @@ void fill_base(CFMutableDictionaryRef query, std::string const& service_str,
 // kSecUseKeychain report errSecItemNotFound for items SecItemAdd stored there,
 // while kSecMatchSearchList scoped to the same keychain finds them. Matching
 // queries therefore scope by search list; only the add carries kSecUseKeychain.
-void scope_to_keychain(CFMutableDictionaryRef query, void* keychain) {
+static void scope_to_keychain(CFMutableDictionaryRef query, void* keychain) {
     if (!keychain)
         return; // login keychain: the process default search list already applies
     SecKeychainRef kc = static_cast<SecKeychainRef>(keychain);

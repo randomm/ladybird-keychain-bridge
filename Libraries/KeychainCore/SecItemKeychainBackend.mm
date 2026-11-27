@@ -1,5 +1,5 @@
-#import <Security/Security.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <Security/Security.h>
 
 #include "SecItemKeychainBackend.h"
 
@@ -9,13 +9,11 @@ namespace lkb {
 
 namespace {
 
-CFStringRef cf(std::string const& s)
-{
+CFStringRef cf(std::string const& s) {
     return CFStringCreateWithCString(nullptr, s.c_str(), kCFStringEncodingUTF8);
 }
 
-Error error_from(OSStatus status, std::string_view where)
-{
+Error error_from(OSStatus status, std::string_view where) {
     ErrorCode code = ErrorCode::UnexpectedData;
     switch (status) {
     case errSecItemNotFound:
@@ -34,15 +32,15 @@ Error error_from(OSStatus status, std::string_view where)
     }
     char buf[96];
     snprintf(buf, sizeof(buf), "%.*s: OSStatus %d", static_cast<int>(where.size()), where.data(),
-        static_cast<int>(status));
-    return Error { code, std::string(buf) };
+             static_cast<int>(status));
+    return Error{code, std::string(buf)};
 }
 
-}
+} // namespace
 
-ErrorOr<SecItemKeychainBackend> SecItemKeychainBackend::create(std::string service, std::string account,
-    std::optional<std::string> keychain_path)
-{
+ErrorOr<SecItemKeychainBackend>
+SecItemKeychainBackend::create(std::string service, std::string account,
+                               std::optional<std::string> keychain_path) {
     SecItemKeychainBackend backend;
     backend.m_service = std::move(service);
     backend.m_account = std::move(account);
@@ -57,22 +55,18 @@ ErrorOr<SecItemKeychainBackend> SecItemKeychainBackend::create(std::string servi
     return ErrorOr<SecItemKeychainBackend>::ok(std::move(backend));
 }
 
-SecItemKeychainBackend::~SecItemKeychainBackend()
-{
+SecItemKeychainBackend::~SecItemKeychainBackend() {
     if (m_keychain)
         CFRelease(static_cast<SecKeychainRef>(m_keychain));
 }
 
 SecItemKeychainBackend::SecItemKeychainBackend(SecItemKeychainBackend&& other) noexcept
-    : m_service(std::move(other.m_service))
-    , m_account(std::move(other.m_account))
-    , m_keychain(other.m_keychain)
-{
+    : m_service(std::move(other.m_service)), m_account(std::move(other.m_account)),
+      m_keychain(other.m_keychain) {
     other.m_keychain = nullptr;
 }
 
-SecItemKeychainBackend& SecItemKeychainBackend::operator=(SecItemKeychainBackend&& other) noexcept
-{
+SecItemKeychainBackend& SecItemKeychainBackend::operator=(SecItemKeychainBackend&& other) noexcept {
     if (this != &other) {
         if (m_keychain)
             CFRelease(static_cast<SecKeychainRef>(m_keychain));
@@ -85,24 +79,35 @@ SecItemKeychainBackend& SecItemKeychainBackend::operator=(SecItemKeychainBackend
 }
 
 void fill_base(CFMutableDictionaryRef query, std::string const& service_str,
-    std::string const& account_str, void* keychain)
-{
+               std::string const& account_str) {
     CFStringRef service = cf(service_str);
     CFStringRef account = cf(account_str);
     CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword);
     CFDictionarySetValue(query, kSecAttrService, service);
     CFDictionarySetValue(query, kSecAttrAccount, account);
-    if (keychain)
-        CFDictionarySetValue(query, kSecUseKeychain, static_cast<SecKeychainRef>(keychain));
     CFRelease(service);
     CFRelease(account);
 }
 
-ErrorOr<ByteBuffer> SecItemKeychainBackend::read_master_key()
-{
-    CFMutableDictionaryRef query = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks,
-        &kCFTypeDictionaryValueCallBacks);
-    fill_base(query, m_service, m_account, m_keychain);
+// Empirically (Darwin 27.3): SecItemCopyMatching/SecItemDelete scoped by
+// kSecUseKeychain report errSecItemNotFound for items SecItemAdd stored there,
+// while kSecMatchSearchList scoped to the same keychain finds them. Matching
+// queries therefore scope by search list; only the add carries kSecUseKeychain.
+void scope_to_keychain(CFMutableDictionaryRef query, void* keychain) {
+    if (!keychain)
+        return; // login keychain: the process default search list already applies
+    SecKeychainRef kc = static_cast<SecKeychainRef>(keychain);
+    const void* items[] = {kc};
+    CFArrayRef list = CFArrayCreate(nullptr, items, 1, &kCFTypeArrayCallBacks);
+    CFDictionarySetValue(query, kSecMatchSearchList, list);
+    CFRelease(list);
+}
+
+ErrorOr<ByteBuffer> SecItemKeychainBackend::read_master_key() {
+    CFMutableDictionaryRef query = CFDictionaryCreateMutable(
+        nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    fill_base(query, m_service, m_account);
+    scope_to_keychain(query, m_keychain);
     CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue);
     CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne);
 
@@ -115,7 +120,7 @@ ErrorOr<ByteBuffer> SecItemKeychainBackend::read_master_key()
     if (!result || CFGetTypeID(result) != CFDataGetTypeID()) {
         if (result)
             CFRelease(result);
-        return ErrorOr<ByteBuffer>::error({ ErrorCode::UnexpectedData, "master key not CFData" });
+        return ErrorOr<ByteBuffer>::error({ErrorCode::UnexpectedData, "master key not CFData"});
     }
     auto* data = static_cast<CFDataRef>(result);
     ByteBuffer key;
@@ -124,37 +129,57 @@ ErrorOr<ByteBuffer> SecItemKeychainBackend::read_master_key()
     return ErrorOr<ByteBuffer>::ok(std::move(key));
 }
 
-ErrorOr<void> SecItemKeychainBackend::write_master_key(ByteBuffer const& key, Accessibility)
-{
-    CFMutableDictionaryRef attrs = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks,
-        &kCFTypeDictionaryValueCallBacks);
-    fill_base(attrs, m_service, m_account, m_keychain);
+ErrorOr<void> SecItemKeychainBackend::write_master_key(ByteBuffer const& key, Accessibility) {
+    CFMutableDictionaryRef match = CFDictionaryCreateMutable(
+        nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    fill_base(match, m_service, m_account);
+    scope_to_keychain(match, m_keychain);
 
     CFDataRef data = CFDataCreate(nullptr, key.data(), static_cast<CFIndex>(key.size()));
-    CFMutableDictionaryRef update = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks,
-        &kCFTypeDictionaryValueCallBacks);
+    CFMutableDictionaryRef update = CFDictionaryCreateMutable(
+        nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFDictionarySetValue(update, kSecValueData, data);
 
-    OSStatus status = SecItemUpdate(attrs, update);
+    OSStatus status = SecItemUpdate(match, update);
     if (status == errSecItemNotFound) {
-        CFDictionarySetValue(attrs, kSecValueData, data);
-        CFDictionarySetValue(attrs, kSecAttrAccessible, kSecAttrAccessibleWhenUnlocked);
-        status = SecItemAdd(attrs, nullptr);
+        CFMutableDictionaryRef add = CFDictionaryCreateMutable(
+            nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        fill_base(add, m_service, m_account);
+        if (m_keychain)
+            CFDictionarySetValue(add, kSecUseKeychain, static_cast<SecKeychainRef>(m_keychain));
+        CFDictionarySetValue(add, kSecValueData, data);
+        CFDictionarySetValue(add, kSecAttrAccessible, kSecAttrAccessibleWhenUnlocked);
+        status = SecItemAdd(add, nullptr);
+        CFRelease(add);
     }
     CFRelease(update);
     CFRelease(data);
-    CFRelease(attrs);
+    CFRelease(match);
 
     if (status != noErr)
         return ErrorOr<void>::error(error_from(status, "SecItemUpdate/Add"));
     return ErrorOr<void>::ok();
 }
 
-bool SecItemKeychainBackend::is_available()
-{
-    CFMutableDictionaryRef query = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks,
-        &kCFTypeDictionaryValueCallBacks);
-    fill_base(query, m_service, m_account, m_keychain);
+ErrorOr<void> SecItemKeychainBackend::delete_master_key() {
+    CFMutableDictionaryRef query = CFDictionaryCreateMutable(
+        nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    fill_base(query, m_service, m_account);
+    scope_to_keychain(query, m_keychain);
+
+    OSStatus status = SecItemDelete(query);
+    CFRelease(query);
+
+    if (status != noErr && status != errSecItemNotFound)
+        return ErrorOr<void>::error(error_from(status, "SecItemDelete"));
+    return ErrorOr<void>::ok();
+}
+
+bool SecItemKeychainBackend::is_available() {
+    CFMutableDictionaryRef query = CFDictionaryCreateMutable(
+        nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    fill_base(query, m_service, m_account);
+    scope_to_keychain(query, m_keychain);
     CFDictionarySetValue(query, kSecReturnRef, kCFBooleanTrue);
     CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne);
 
@@ -169,4 +194,4 @@ bool SecItemKeychainBackend::is_available()
     return status != errSecInteractionNotAllowed && status != errSecNoSuchKeychain;
 }
 
-}
+} // namespace lkb

@@ -16,7 +16,9 @@ fi
 PW=$(date +%s | shasum | cut -c1-24)
 security create-keychain -p "$PW" "$LKB_TEST_KEYCHAIN_PATH"
 security unlock-keychain -p "$PW" "$LKB_TEST_KEYCHAIN_PATH"
-security set-key-partition-list -S apple-tool:,apple: -s -k "$PW" "$LKB_TEST_KEYCHAIN_PATH" > /dev/null 2>&1
+# Best-effort: current macOS rejects this for a freshly created empty keychain;
+# the smoke roundtrip itself is the visibility check.
+security set-key-partition-list -S apple-tool:,apple: -s -k "$PW" "$LKB_TEST_KEYCHAIN_PATH" > /dev/null 2>&1 || true
 
 rc=0
 "$BIN" --keychain "$LKB_TEST_KEYCHAIN_PATH" || rc=$?

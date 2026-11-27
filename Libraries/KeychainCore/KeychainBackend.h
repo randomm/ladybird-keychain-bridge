@@ -16,8 +16,7 @@ enum class Accessibility {
     WhenUnlocked,
 };
 
-inline ErrorCode to_error_code(KeychainError e)
-{
+inline ErrorCode to_error_code(KeychainError e) {
     switch (e) {
     case KeychainError::NotFound:
         return ErrorCode::NotFound;
@@ -34,11 +33,12 @@ inline ErrorCode to_error_code(KeychainError e)
 // The single seam to the OS credential store. All tests use FakeKeychainBackend;
 // only Apple .mm backends may touch Security.framework.
 class KeychainBackend {
-public:
+  public:
     virtual ~KeychainBackend() = default;
     virtual ErrorOr<ByteBuffer> read_master_key() = 0;
     virtual ErrorOr<void> write_master_key(ByteBuffer const&, Accessibility) = 0;
+    virtual ErrorOr<void> delete_master_key() = 0;
     virtual bool is_available() = 0;
 };
 
-}
+} // namespace lkb

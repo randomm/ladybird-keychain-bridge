@@ -14,7 +14,7 @@ find_package(SQLite3 REQUIRED)
 enable_testing()
 
 # CredentialService links CsvBridge (admin wrappers), so CsvBridge configures first.
-foreach(dir Core KeychainCore CredentialCrypto VaultStore CsvBridge CredentialService BridgeProto)
+foreach(dir Core KeychainCore CredentialCrypto VaultStore CsvBridge CredentialService BridgeProto BridgeHost)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/Libraries/${dir}/CMakeLists.txt)
         add_subdirectory(Libraries/${dir})
     endif()

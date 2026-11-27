@@ -11,6 +11,10 @@
 namespace lkb {
 
 struct CredentialRecord {
+    // Row id in the vault; populated only on read paths that carry it (all()),
+    // so admin surfaces can name records for deletion. Not part of the stored
+    // payload — put() assigns its own id.
+    std::int64_t id{0};
     Origin origin;
     std::string username;
     ByteBuffer secret;

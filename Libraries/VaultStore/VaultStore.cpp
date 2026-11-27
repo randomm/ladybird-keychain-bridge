@@ -402,28 +402,29 @@ ErrorOr<Origin> VaultStore::origin_of_id(std::int64_t id) {
 ErrorOr<std::vector<CredentialRecord>> VaultStore::all(size_t& out_undecodable) {
     out_undecodable = 0;
     sqlite3_stmt* stmt = prepare_or_null(
-        m_db, "SELECT scheme, host, port, blob, created, last_used, updated FROM credentials;");
+        m_db, "SELECT id, scheme, host, port, blob, created, last_used, updated FROM credentials;");
     if (!stmt)
         return ErrorOr<std::vector<CredentialRecord>>::error(db_error("prepare all"));
 
     std::vector<CredentialRecord> records;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         Origin origin;
-        origin.scheme = reinterpret_cast<char const*>(sqlite3_column_text(stmt, 0));
-        origin.host = reinterpret_cast<char const*>(sqlite3_column_text(stmt, 1));
-        origin.port = static_cast<std::uint16_t>(sqlite3_column_int(stmt, 2));
-        auto const* data = static_cast<std::uint8_t const*>(sqlite3_column_blob(stmt, 3));
-        int len = sqlite3_column_bytes(stmt, 3);
+        origin.scheme = reinterpret_cast<char const*>(sqlite3_column_text(stmt, 1));
+        origin.host = reinterpret_cast<char const*>(sqlite3_column_text(stmt, 2));
+        origin.port = static_cast<std::uint16_t>(sqlite3_column_int(stmt, 3));
+        auto const* data = static_cast<std::uint8_t const*>(sqlite3_column_blob(stmt, 4));
+        int len = sqlite3_column_bytes(stmt, 4);
         ByteBuffer blob(data, data + len);
         // Reconstruct has_explicit_port: stored port differs from scheme default,
         // or serialize() must round-trip for the stored (scheme,host,port) triple.
         origin.has_explicit_port = true;
-        auto rec = decrypt_record(origin, blob, sqlite3_column_int64(stmt, 4),
-                                  sqlite3_column_int64(stmt, 5), sqlite3_column_int64(stmt, 6));
+        auto rec = decrypt_record(origin, blob, sqlite3_column_int64(stmt, 5),
+                                  sqlite3_column_int64(stmt, 6), sqlite3_column_int64(stmt, 7));
         if (rec.is_error()) {
             ++out_undecodable;
             continue;
         }
+        rec.value().id = sqlite3_column_int64(stmt, 0); // admin surfaces name rows by this
         records.push_back(std::move(rec.value()));
     }
     sqlite3_finalize(stmt);

@@ -28,7 +28,7 @@ security set-keychain-settings -u -t 3600 "$TMP_KC" > /dev/null 2>&1
 security set-key-partition-list -S apple-tool:,apple: -s -k "$PASS" "$TMP_KC" > /dev/null 2>&1 \
     || echo "note: set-key-partition-list declined (continuing)"
 
-LKB_OWNER_RUN=1 "$PROBE" --keychain "$TMP_KC"
+LKB_OWNER_RUN=1 "$PROBE" --keychain "$TMP_KC" --json "${LKB_PROBE_RESULTS:-docs/probes/latest.json}"
 rc=$?
 echo "probe exit: $rc"
 exit "$rc"

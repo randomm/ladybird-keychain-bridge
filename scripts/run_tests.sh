@@ -42,6 +42,11 @@ if [ -f CMakeLists.txt ]; then
     cmake -S . -B build > build-configure.log 2>&1 || { echo "configure FAILED"; tail -20 build-configure.log; fail=1; }
     cmake --build build > build-compile.log 2>&1 || { echo "build FAILED"; tail -40 build-compile.log; fail=1; }
     ctest --test-dir build --output-on-failure || fail=1
+    if [ "$(uname)" = "Darwin" ]; then
+        # The owner-run probe tool must always compile (it is the release gate's instrument).
+        [ -x build/Libraries/KeychainCore/lkb-probe ] \
+            || { echo "FAIL: lkb-probe not built on macOS"; fail=1; }
+    fi
 else
     echo "(no CMakeLists.txt yet)"
 fi

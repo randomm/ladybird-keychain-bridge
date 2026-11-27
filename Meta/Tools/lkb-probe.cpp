@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
     std::string keychain_path;
     std::string service = "Ladybird Credentials Probe";
     std::string account = "lkb-probe";
+    std::string json_path;
     for (int i = 1; i + 1 < argc; i += 2) {
         if (!std::strcmp(argv[i], "--keychain"))
             keychain_path = argv[i + 1];
@@ -27,6 +28,8 @@ int main(int argc, char** argv) {
             service = argv[i + 1];
         else if (!std::strcmp(argv[i], "--account"))
             account = argv[i + 1];
+        else if (!std::strcmp(argv[i], "--json"))
+            json_path = argv[i + 1];
     }
     if (keychain_path.empty()) {
         std::printf("PROBE FAILED: --keychain <dedicated path> required\n");
@@ -58,6 +61,31 @@ int main(int argc, char** argv) {
 
     bool all_ok =
         caps.keychain_available && caps.save_read_roundtrip && caps.update && caps.delete_item;
+
+    if (!json_path.empty()) {
+        // Capability matrix only — audit entries are {operation, status} tokens, never secrets.
+        FILE* out = std::fopen(json_path.c_str(), "w");
+        if (!out) {
+            std::printf("PROBE WARNING: cannot write %s\n", json_path.c_str());
+        } else {
+            std::fprintf(out, "{\n  \"capabilities\": {\n");
+            std::fprintf(out, "    \"keychain_available\": %s,\n",
+                         caps.keychain_available ? "true" : "false");
+            std::fprintf(out, "    \"save_read_roundtrip\": %s,\n",
+                         caps.save_read_roundtrip ? "true" : "false");
+            std::fprintf(out, "    \"update\": %s,\n", caps.update ? "true" : "false");
+            std::fprintf(out, "    \"delete\": %s\n", caps.delete_item ? "true" : "false");
+            std::fprintf(out, "  },\n  \"audit\": [");
+            for (size_t i = 0; i < source.audit().size(); ++i) {
+                auto const& e = source.audit()[i];
+                std::fprintf(out, "%s\n    {\"operation\": \"%s\", \"status\": \"%s\"}",
+                             i ? "," : "", e.operation.c_str(), e.status.c_str());
+            }
+            std::fprintf(out, "\n  ],\n  \"passed\": %s\n}\n", all_ok ? "true" : "false");
+            std::fclose(out);
+        }
+    }
+
     std::printf("%s\n", all_ok ? "PROBE PASSED" : "PROBE DEGRADED");
     return all_ok ? 0 : 1;
 }

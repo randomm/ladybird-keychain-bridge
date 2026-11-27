@@ -12,6 +12,10 @@ session start). Read those before touching code.
 4. `scripts/check_patches.sh` — exit 0 whenever `patches/` or `docs/superpowers/plans/` changed.
 5. Offline doctrine check: `grep -rniE 'SecItem(Add|CopyMatching|Update|Delete)' --include='*.cpp' --include='*.h' . | grep -v testing` must return empty (SecItem calls live only in `.mm` backends).
 
+Merges gate on items 1–5 (the core suites) only. Release tags additionally require the
+owner-run smoke+probe logs attached per `docs/release-gate.md` — agents never run or
+attach them; `LKB_OWNER_RUN` is a human's switch.
+
 ## Hard budgets (ratchet-only)
 
 - Any source file < 800 lines; any script < 200 lines; the plan/spec docs are exempt.

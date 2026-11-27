@@ -7,12 +7,19 @@ is unaffected). POST /signin returns a friendly 200 page. Nothing is
 recorded, logged to disk, or sent anywhere — request logging stays on so
 you can see the browser's traffic in the terminal.
 
-Run from this directory:  python3 demo_server.py  (port 8080)
+Run from anywhere:  python3 demo_server.py  (port 8080)
 """
-import http.server
+import os
+import socket
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-class Handler(http.server.SimpleHTTPRequestHandler):
+class Handler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=DIR, **kwargs)
+
     def do_POST(self):  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
         self.rfile.read(length)  # discard the form body; nothing is stored
@@ -31,5 +38,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class DualStackServer(ThreadingHTTPServer):
+    address_family = socket.AF_INET6  # accept both ::1 and 127.0.0.1
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
+
+
 if __name__ == "__main__":
-    http.server.test(Handler=Handler, port=8080)
+    DualStackServer(("::", 8080), Handler).serve_forever()

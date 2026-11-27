@@ -69,6 +69,8 @@ namespace Ladybird {
 // empty management page).
 class CredentialsBridgeHost final : public CredentialsBridgeDelegate {
 public:
+    AK_ALLOC_WITH_KMALLOC;
+
     static OwnPtr<CredentialsBridgeHost> try_create();
     virtual ~CredentialsBridgeHost() override;
 
@@ -88,8 +90,11 @@ public:
     virtual bool credentials_delete_all(Utf16String const&) override;
     virtual Utf16String credentials_export_csv() override;
 
-private:
+    // Public for make<>: a host constructed without try_create() has no Impl
+    // and answers every call with the delegate's declared declines.
     CredentialsBridgeHost();
+
+private:
     struct Impl;
     OwnPtr<Impl> m_impl; // null => bridge not linked; every method declines
 };
@@ -137,17 +142,32 @@ public:
         arc4random_buf(buf, sizeof(buf));
         ByteString hex;
         for (auto byte : ReadonlyBytes { reinterpret_cast<u8 const*>(buf), sizeof(buf) })
-            hex = ByteString::formatted("{}{:02x}", hex, byte).release_value_but_fixme_should_propagate_errors();
+            hex = ByteString::formatted("{}{:02x}", hex, byte);
         return lkb::ErrorOr<std::string>::ok(std::string(hex.characters()));
     }
 };
 
-ByteString to_bs(Utf16String const& s) { return s.to_byte_string(); }
-Utf16String to_u16(std::string const& s) { return Utf16String::from_utf8(s); }
+std::string to_bs(String const& s)
+{
+    ByteString bs = s.to_byte_string();
+    return std::string(bs.characters());
+}
+
+std::string to_bs(Utf16String const& s)
+{
+    ByteString bs = s.to_byte_string();
+    return std::string(bs.characters());
+}
+
+StringView sv(std::string const& s) { return { s.data(), s.size() }; }
+
+Utf16String to_u16(std::string const& s) { return Utf16String::from_utf8(StringView { s.data(), s.size() }); }
 
 }
 
 struct CredentialsBridgeHost::Impl {
+    AK_ALLOC_WITH_KMALLOC;
+
     Impl(lkb::SecItemKeychainBackend backend, lkb::VaultStore vault)
         : backend(move(backend))
         , vault(move(vault))
@@ -173,24 +193,24 @@ OwnPtr<CredentialsBridgeHost> CredentialsBridgeHost::try_create()
     auto backend = lkb::SecItemKeychainBackend::create("Ladybird Safe Storage", "Ladybird", std::nullopt);
     if (backend.is_error()) {
         dbgln("ladybird-keychain-bridge: keychain unavailable ({}); credentials stay off",
-              backend.error().message);
+              sv(backend.error().message));
         return nullptr;
     }
     auto key = lkb::master_key_or_create(backend.value(), lkb::default_master_key_rng);
     if (key.is_error()) {
         dbgln("ladybird-keychain-bridge: master key unavailable ({}); credentials stay off",
-              key.error().message);
+              sv(key.error().message));
         return nullptr;
     }
-    auto db_path = ByteString::formatted("{}/ladybird-credentials-vault.db", Core::StandardPaths::data_directory());
-    auto vault = lkb::VaultStore::open(std::string(db_path.to_byte_string().characters()), key.value());
+    auto db_path = ByteString::formatted("{}/ladybird-credentials-vault.db", Core::StandardPaths::user_data_directory());
+    auto vault = lkb::VaultStore::open(std::string(db_path.characters()), std::move(key.value()));
     if (vault.is_error()) {
         dbgln("ladybird-keychain-bridge: vault unavailable ({}); credentials stay off",
-              vault.error().message);
+              sv(vault.error().message));
         return nullptr;
     }
     auto host = make<CredentialsBridgeHost>();
-    host->m_impl = make<Impl>(backend.release_value(), vault.release_value());
+    host->m_impl = make<Impl>(std::move(backend.value()), std::move(vault.value()));
     return host;
 }
 

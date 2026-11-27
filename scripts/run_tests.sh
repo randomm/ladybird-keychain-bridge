@@ -61,6 +61,9 @@ else
     echo "(no CMakeLists.txt yet)"
 fi
 
+echo "== patched-UI syntax =="
+sh scripts/syntax_check_ui.sh || fail=1
+
 if [ "$fail" -eq 0 ]; then echo "ALL GREEN"; exit 0; fi
 echo "GATE FAILED"
 exit 1

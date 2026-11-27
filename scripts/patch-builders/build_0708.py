@@ -1085,6 +1085,8 @@ namespace Ladybird {
 // { origin, username } only; secrets are never rendered here.
 class CredentialSettingsPage final : public WebUIPage {
 public:
+    AK_ALLOC_WITH_KMALLOC;
+
     explicit CredentialSettingsPage(u64 web_ui_id)
         : WebUIPage(web_ui_id)
     {
@@ -1107,10 +1109,22 @@ NEW_FILES["UI/Qt/CredentialSettingsPage.cpp"] = r'''/*
 
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
+#include <LibWebView/BrowsingSession.h>
 #include <UI/Qt/CredentialSettingsPage.h>
 #include <UI/Qt/CredentialsPrompt.h>
 
 namespace Ladybird {
+
+namespace {
+
+// JsonValue refuses ByteString (deleted ctor); Strings cross as StringView.
+JsonValue json_string(Utf16String const& text)
+{
+    ByteString bs = text.to_byte_string();
+    return JsonValue { StringView { bs.characters(), bs.length() } };
+}
+
+}
 
 void CredentialSettingsPage::received_message(String const& name, JsonValue const& data)
 {
@@ -1122,11 +1136,11 @@ void CredentialSettingsPage::received_message(String const& name, JsonValue cons
     if (!delegate)
         return;
     if (name == "deleteCredential"sv)
-        delegate->credentials_delete(data.to_u64().value_or(0));
+        delegate->credentials_delete(data.get_integer<u64>().value_or(0));
     else if (name == "deleteAllForOrigin"sv) {
         if (!consume_user_activation())
             return; // the button is the user's; a scripted sendMessage is not
-        auto origin = Utf16String::from_utf8(data.to_string_without_quotes().value_or(String {}));
+        auto origin = Utf16String::from_utf8(data.as_string());
         // Exact match against a stored origin only: the search box is free text,
         // and a partial match must never delete a site the user did not name.
         bool exact_match = false;
@@ -1141,7 +1155,9 @@ void CredentialSettingsPage::received_message(String const& name, JsonValue cons
     } else if (name == "exportCsv"sv) {
         if (!consume_user_activation())
             return; // bulk plaintext leaves the vault only on a real click
-        send_message("downloadCsv"_string, JsonValue { JsonObject { { "csv"_string, JsonValue { delegate->credentials_export_csv().to_byte_string() } } } });
+        JsonObject csv_payload;
+        csv_payload.set("csv"_string, json_string(delegate->credentials_export_csv()));
+        send_message("downloadCsv"_string, JsonValue { move(csv_payload) });
     }
     load_credentials();
 }
@@ -1152,8 +1168,8 @@ void CredentialSettingsPage::load_credentials()
     if (auto* delegate = credentials_bridge_delegate()) {
         for (auto const& row : delegate->credentials_rows()) {
             JsonObject entry;
-            entry.set("origin"_string, row.origin.to_byte_string());
-            entry.set("username"_string, row.username.to_byte_string());
+            entry.set("origin"_string, json_string(row.origin));
+            entry.set("username"_string, json_string(row.username));
             entry.set("id"_string, JsonValue { row.id });
             rows.append(move(entry));
         }

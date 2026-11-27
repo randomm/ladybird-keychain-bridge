@@ -19,9 +19,11 @@ done
 echo "== clang-format (changed files) =="
 changed=$( { git diff --name-only HEAD 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null; } | grep -E '\.(cpp|h|hpp|mm)$' | sort -u || true )
 if [ -n "$changed" ]; then
-    if command -v clang-format >/dev/null 2>&1; then
+    CF_BIN=clang-format
+    command -v clang-format >/dev/null 2>&1 || CF_BIN=$(xcrun --find clang-format 2>/dev/null || true)
+    if [ -n "$CF_BIN" ]; then
         # shellcheck disable=SC2086
-        clang-format --dry-run --Werror $changed || { echo "FAIL: clang-format"; fail=1; }
+        "$CF_BIN" --dry-run --Werror $changed || { echo "FAIL: clang-format"; fail=1; }
     else
         echo "FAIL: clang-format not installed but source files changed"
         fail=1

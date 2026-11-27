@@ -788,17 +788,17 @@ edit("UI/Qt/Tab.cpp",
             return;
         }
         delegate->js_get_credentials(origin, allow_silent, password_requested, [this, request_id](bool found, Utf16String username, Utf16String secret) {
-            HubConnection::the().async_view_answer_js_get_credentials(view().view_id(), request_id, found, move(username), move(secret));
+            HubConnection::the().async_view_answer_js_get_credentials(view().view_id(), request_id, found, AK::move(username), AK::move(secret));
         });
     };
 
-    view().on_request_js_store_credentials = [this](Utf16String const& origin, Utf16String const& username, Utf16String const& secret) {
+    view().on_request_js_store_credentials = [](Utf16String const& origin, Utf16String const& username, Utf16String const& secret) {
         auto* delegate = Ladybird::credentials_bridge_delegate();
         if (delegate)
             delegate->js_store_credentials(origin, username, secret);
     };
 
-    view().on_request_js_prevent_silent_access = [this](Utf16String const& origin) {
+    view().on_request_js_prevent_silent_access = [](Utf16String const& origin) {
         auto* delegate = Ladybird::credentials_bridge_delegate();
         if (delegate)
             delegate->js_prevent_silent_access(origin, true);

@@ -135,7 +135,7 @@ new file mode 100644
 +static QString qstring_from(AK::String const& string)
 +{
 +    auto bytes = string.to_byte_string();
-+    return QString::fromUtf8(bytes.characters(), static_cast<qsizetype>(bytes.size()));
++    return QString::fromUtf8(bytes.characters(), static_cast<qsizetype>(bytes.bytes().size()));
 +}
 +
 +void show_save_credentials_prompt(QWidget& parent, Web::CredentialsSaveRequestPayload const& payload)
@@ -153,7 +153,7 @@ new file mode 100644
 +    auto* not_now = dialog->addButton(QStringLiteral("Not now"), QMessageBox::RejectRole);
 +    auto* never = dialog->addButton(QStringLiteral("Never for this site"), QMessageBox::DestructiveRole);
 +
-+    QObject::connect(dialog, &QDialog::finished, dialog, [dialog, save, never, payload](int) {
++    QObject::connect(dialog, &QDialog::finished, dialog, [dialog, save, not_now, never, payload](int) {
 +        auto* clicked = dialog->clickedButton();
 +        CredentialsPromptOutcome outcome = CredentialsPromptOutcome::Dismissed;
 +        if (clicked == save)

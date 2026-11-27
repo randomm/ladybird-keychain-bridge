@@ -46,7 +46,7 @@ edit("Libraries/LibWebCommon/Page/TextEditingCommand.h",
      "        DeleteToEndOfParagraph,\n        InsertText,\n    };", "0006")
 edit("Libraries/LibWebCommon/Page/TextEditingCommand.h",
      "    Type type { Type::MoveBackward };\n    bool extend_selection { false };",
-     "    Type type { Type::MoveBackward };\n    bool extend_selection { false };\n    Utf16String text;\n    // Credential inserts carry the token the UI process received with the\n    // popup request; Page::handle_text_editing_command_from_ui validates it.\n    Optional<u64> fill_token;", "0006")
+     "    Type type { Type::MoveBackward };\n    bool extend_selection { false };\n    Utf16String text {};\n    // Credential inserts carry the token the UI process received with the\n    // popup request; Page::handle_text_editing_command_from_ui validates it.\n    Optional<u64> fill_token {};", "0006")
 edit("Libraries/LibWebCommon/Page/TextEditingCommand.h",
      "#include <AK/Types.h>",
      "#include <AK/Optional.h>\n#include <AK/Types.h>\n#include <AK/Utf16String.h>", "0006")
@@ -56,7 +56,7 @@ edit("Libraries/LibWebCommon/Page/TextEditingCommand.ipc",
      "    DeleteToEndOfParagraph,\n    InsertText,\n}", "0006")
 edit("Libraries/LibWebCommon/Page/TextEditingCommand.ipc",
      "    Web::TextEditingCommand::Type type;\n    bool extend_selection;\n}",
-     "    Web::TextEditingCommand::Type type;\n    bool extend_selection;\n    Utf16String text;\n    Optional<u64> fill_token;\n}", "0006")
+     "    Web::TextEditingCommand::Type type;\n    bool extend_selection;\n    Utf16String text {};\n    Optional<u64> fill_token {};\n}", "0006")
 
 edit("Libraries/LibWeb/Page/EventHandler.cpp",
      """        target->handle_delete(input_type);
@@ -421,6 +421,16 @@ edit("UI/Qt/NativeTextEditingLineEdit.cpp",
      "include <UI/Qt/NativeTextEditingLineEdit.h>\n\n#ifdef AK_OS_MACOS",
      "include <UI/Qt/NativeTextEditingLineEdit.h>\n#include <UI/Qt/StringUtils.h>\n\n#ifdef AK_OS_MACOS", "0006")
 
+# Upstream file: 0006 grew TextEditingCommand with text/fill_token, so these
+# aggregate inits must name every field under -Werror,-Wmissing-field-initializers.
+edit("UI/Qt/NativeTextEditingBindings.mm",
+     "            return Web::TextEditingCommand { command.type, false };",
+     "            return Web::TextEditingCommand { command.type, false, {}, {} };", "0006")
+
+edit("UI/Qt/NativeTextEditingBindings.mm",
+     "            return Web::TextEditingCommand { command.type, true };",
+     "            return Web::TextEditingCommand { command.type, true, {}, {} };", "0006")
+
 edit("UI/Qt/RemoteView.h",
      "    decltype(Hub::View::on_request_save_credentials) on_request_save_credentials;",
      """    decltype(Hub::View::on_request_save_credentials) on_request_save_credentials;
@@ -507,9 +517,9 @@ edit("UI/Qt/Tab.cpp",
             option.id = static_cast<u32>(index); // per-popup index: vault ids are u64
             option.label = suggestion.label;
             option.value = suggestion.username;
-            items.append(Web::HTML::SelectItem { move(option) });
+            items.append(Web::HTML::SelectItem { AK::move(option) });
         }
-        m_credentials_suggestions = move(suggestions);
+        m_credentials_suggestions = AK::move(suggestions);
         m_credentials_fill_token = fill_token;
         m_credentials_dropdown->on_closed = [this](Optional<u32> const& selected_id) {
             if (!selected_id.has_value())

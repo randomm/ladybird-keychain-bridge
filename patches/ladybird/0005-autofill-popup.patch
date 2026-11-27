@@ -408,9 +408,9 @@ diff --git a/UI/Qt/Tab.cpp b/UI/Qt/Tab.cpp
 +            option.id = static_cast<u32>(index); // per-popup index: vault ids are u64
 +            option.label = suggestion.label;
 +            option.value = suggestion.username;
-+            items.append(Web::HTML::SelectItem { move(option) });
++            items.append(Web::HTML::SelectItem { AK::move(option) });
 +        }
-+        m_credentials_suggestions = move(suggestions);
++        m_credentials_suggestions = AK::move(suggestions);
 +        m_credentials_fill_token = fill_token;
 +        m_credentials_dropdown->on_closed = [this](Optional<u32> const& selected_id) {
 +            if (!selected_id.has_value())

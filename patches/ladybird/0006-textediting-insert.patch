@@ -100,10 +100,10 @@ diff --git a/Libraries/LibWebCommon/Page/TextEditingCommand.h b/Libraries/LibWeb
  
      Type type { Type::MoveBackward };
      bool extend_selection { false };
-+    Utf16String text;
++    Utf16String text {};
 +    // Credential inserts carry the token the UI process received with the
 +    // popup request; Page::handle_text_editing_command_from_ui validates it.
-+    Optional<u64> fill_token;
++    Optional<u64> fill_token {};
  
      bool operator==(TextEditingCommand const&) const = default;
  };
@@ -121,8 +121,8 @@ diff --git a/Libraries/LibWebCommon/Page/TextEditingCommand.ipc b/Libraries/LibW
  struct Web::TextEditingCommand {
      Web::TextEditingCommand::Type type;
      bool extend_selection;
-+    Utf16String text;
-+    Optional<u64> fill_token;
++    Utf16String text {};
++    Optional<u64> fill_token {};
  }
 diff --git a/Services/WebContent/ConnectionFromClient.cpp b/Services/WebContent/ConnectionFromClient.cpp
 --- a/Services/WebContent/ConnectionFromClient.cpp
@@ -183,6 +183,21 @@ diff --git a/Services/WebContent/WebContentServer.ipc b/Services/WebContent/WebC
      mouse_event(Web::PageId page_id, Web::MouseEvent event) =|
      mouse_event_in_hosted_root(Web::PageId page_id, Web::HTML::CrossProcessId navigable_id, Web::MouseEvent event) =|
      pinch_event_in_hosted_root(Web::PageId page_id, Web::HTML::CrossProcessId navigable_id, Web::PinchEvent event) =|
+diff --git a/UI/Qt/NativeTextEditingBindings.mm b/UI/Qt/NativeTextEditingBindings.mm
+--- a/UI/Qt/NativeTextEditingBindings.mm
++++ b/UI/Qt/NativeTextEditingBindings.mm
+@@ -46,9 +46,9 @@
+     };
+     for (auto const& command : commands) {
+         if (selector == command.selector)
+-            return Web::TextEditingCommand { command.type, false };
++            return Web::TextEditingCommand { command.type, false, {}, {} };
+         if (command.selection_selector && selector == command.selection_selector)
+-            return Web::TextEditingCommand { command.type, true };
++            return Web::TextEditingCommand { command.type, true, {}, {} };
+     }
+     return {};
+ }
 diff --git a/UI/Qt/NativeTextEditingLineEdit.cpp b/UI/Qt/NativeTextEditingLineEdit.cpp
 --- a/UI/Qt/NativeTextEditingLineEdit.cpp
 +++ b/UI/Qt/NativeTextEditingLineEdit.cpp

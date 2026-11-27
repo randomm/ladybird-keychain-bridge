@@ -121,8 +121,8 @@ diff --git a/Libraries/LibWebCommon/Page/TextEditingCommand.ipc b/Libraries/LibW
  struct Web::TextEditingCommand {
      Web::TextEditingCommand::Type type;
      bool extend_selection;
-+    Utf16String text {};
-+    Optional<u64> fill_token {};
++    Utf16String text;
++    Optional<u64> fill_token;
  }
 diff --git a/Services/WebContent/ConnectionFromClient.cpp b/Services/WebContent/ConnectionFromClient.cpp
 --- a/Services/WebContent/ConnectionFromClient.cpp

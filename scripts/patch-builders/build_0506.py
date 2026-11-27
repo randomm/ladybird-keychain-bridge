@@ -56,7 +56,7 @@ edit("Libraries/LibWebCommon/Page/TextEditingCommand.ipc",
      "    DeleteToEndOfParagraph,\n    InsertText,\n}", "0006")
 edit("Libraries/LibWebCommon/Page/TextEditingCommand.ipc",
      "    Web::TextEditingCommand::Type type;\n    bool extend_selection;\n}",
-     "    Web::TextEditingCommand::Type type;\n    bool extend_selection;\n    Utf16String text {};\n    Optional<u64> fill_token {};\n}", "0006")
+     "    Web::TextEditingCommand::Type type;\n    bool extend_selection;\n    Utf16String text;\n    Optional<u64> fill_token;\n}", "0006")
 
 edit("Libraries/LibWeb/Page/EventHandler.cpp",
      """        target->handle_delete(input_type);

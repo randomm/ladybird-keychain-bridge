@@ -28,6 +28,17 @@ for p in patches/ladybird/[0-9][0-9][0-9][0-9]-*.patch; do
         break
     fi
 done
+# Drift check (added by the pi-rukas ticket verifier, which caught a source
+# name typo no apply-check can see): every source the stack adds to the
+# ladybird_impl block must exist as a real file after the stack is applied.
+if [ "$fail" -eq 0 ]; then
+    for src in $(awk '/add_library\(ladybird_impl STATIC/{f=1;next} f&&/^\)/{f=0} f' \
+                 "$TARGET/UI/Qt/CMakeLists.txt" 2>/dev/null \
+                 | grep -oE '[A-Za-z0-9_]+\.cpp' | sort -u); do
+        [ -f "$TARGET/UI/Qt/$src" ] \
+            || { echo "FAIL: CMake names missing source UI/Qt/$src"; fail=1; }
+    done
+fi
 git -C "$TARGET" checkout -- . > /dev/null 2>&1
 git -C "$TARGET" clean -fd > /dev/null 2>&1
 [ "$found" -eq 1 ] || { echo "no patch files"; exit 1; }

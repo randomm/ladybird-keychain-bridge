@@ -53,7 +53,7 @@ diff --git a/UI/Qt/CMakeLists.txt b/UI/Qt/CMakeLists.txt
      FeedbackPopover.cpp
      FindInPageWidget.cpp
      HiddenPageSizing.cpp
-+    CredentialBridgeHost.cpp
++    CredentialsBridgeHost.cpp
      CredentialSettingsPage.cpp
      HistoryPage.cpp
      HubConnection.cpp

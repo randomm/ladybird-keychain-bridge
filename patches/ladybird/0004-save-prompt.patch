@@ -1,0 +1,279 @@
+diff --git a/Libraries/LibWebView/ViewImplementation.h b/Libraries/LibWebView/ViewImplementation.h
+index cac38fbe..29613678 100644
+--- a/Libraries/LibWebView/ViewImplementation.h
++++ b/Libraries/LibWebView/ViewImplementation.h
+@@ -41,6 +41,7 @@
+ #include <LibRequests/Forward.h>
+ #include <LibRequests/NetworkError.h>
+ #include <LibURL/Origin.h>
++#include <LibWeb/HTML/CredentialsSaveRequestPayload.h>
+ #include <LibWebCommon/Bindings/Navigation.h>
+ #include <LibWebCommon/Fetch/Infrastructure/HTTP/RequestPriority.h>
+ #include <LibWebCommon/Forward.h>
+@@ -163,6 +164,11 @@ public:
+     void set_site_permission(URL::Origin const&, Web::Permissions::PermissionName, Optional<PermissionDecision>);
+     void reset_site_permissions(URL::Origin const&);
+     void did_request_permission(Badge<WebContentPage>, Web::Permissions::PermissionName);
++    void did_request_save_credentials(Badge<WebContentPage>, Web::CredentialsSaveRequestPayload const& payload)
++    {
++        if (on_request_save_credentials)
++            on_request_save_credentials(payload);
++    }
+ 
+     MicrophoneAuthorization microphone_authorization() const;
+     // Calls back with whether the system lets the browser use the microphone, once the system has asked the user if it
+@@ -755,6 +761,7 @@ public:
+     Function<void(WebContentPage& requesting_page, u64 request_id)> on_stop_geolocation_position_watch;
+     Function<void(PermissionPromptRequest const&, PermissionPromptCallback)> on_request_permission;
+     Function<void(PermissionPromptRequest const&)> on_cancel_permission_prompt;
++    Function<void(Web::CredentialsSaveRequestPayload const&)> on_request_save_credentials;
+     Function<void(TabIndicator, bool visible)> on_tab_indicator_change;
+     Function<void(Web::HTML::FileFilter const& accepted_file_types, Web::HTML::AllowMultipleFiles)> on_request_file_picker;
+     Function<void(Gfx::IntPoint position, Utf16String const& message)> on_show_validation_message;
+diff --git a/Libraries/LibWebView/WebContentPage.cpp b/Libraries/LibWebView/WebContentPage.cpp
+index 2282b8d5..3d3cdc4d 100644
+--- a/Libraries/LibWebView/WebContentPage.cpp
++++ b/Libraries/LibWebView/WebContentPage.cpp
+@@ -1877,6 +1877,11 @@ RefPtr<CanonicalDocument> WebContentPage::hosted_document_with_id(Web::HTML::Cro
+     return found;
+ }
+ 
++void WebContentPage::did_request_save_credentials(Web::CredentialsSaveRequestPayload payload)
++{
++    view().did_request_save_credentials({}, payload);
++}
++
+ void WebContentPage::did_request_permission(u64 request_id, Web::HTML::CrossProcessId document_id, Utf16String name)
+ {
+     auto permission_name = permission_name_from(name);
+diff --git a/Libraries/LibWebView/WebContentPage.h b/Libraries/LibWebView/WebContentPage.h
+index c656846e..f643cf8b 100644
+--- a/Libraries/LibWebView/WebContentPage.h
++++ b/Libraries/LibWebView/WebContentPage.h
+@@ -303,6 +303,7 @@ private:
+     virtual void did_start_geolocation_position_watch(u64 request_id, Web::HTML::CrossProcessId document_id) override;
+     virtual void did_stop_geolocation_position_watch(u64 request_id) override;
+     virtual void did_request_permission(u64 request_id, Web::HTML::CrossProcessId document_id, Utf16String name) override;
++    virtual void did_request_save_credentials(Web::CredentialsSaveRequestPayload payload) override;
+     virtual void did_request_show_notification(u64 notification_id, Web::HTML::CrossProcessId document_id, Web::NotificationsAPI::NotificationData data, Optional<Gfx::ShareableBitmap> icon) override;
+     virtual void did_request_close_notification(u64 notification_id) override;
+     virtual void did_abandon_notification(u64 notification_id) override;
+diff --git a/Services/Hub/HubClient.ipc b/Services/Hub/HubClient.ipc
+index b66e8f42..1e90be84 100644
+--- a/Services/Hub/HubClient.ipc
++++ b/Services/Hub/HubClient.ipc
+@@ -11,6 +11,7 @@
+ #include <LibGfx/SharedImage.h>
+ #include <LibGfx/Size.h>
+ #include <LibURL/Origin.h>
++#include <LibWeb/HTML/CredentialsSaveRequestPayload.h>
+ #include <LibWebCommon/NotificationsAPI/NotificationData.h>
+ #include <LibURL/URL.h>
+ #include <LibWebCommon/CSS/PreferredColorScheme.h>
+@@ -326,6 +327,7 @@ endpoint HubClient
+     view_request_before_unload(u64 view_id, u64 answer_id, String source) =|
+     view_request_external_url_confirmation(u64 view_id, u64 answer_id, URL::URL url, URL::Origin initiator_origin, String application_name) =|
+     view_request_permission(u64 view_id, u64 answer_id, WebView::PermissionPromptRequest request) =|
++    view_request_save_credentials(u64 view_id, Web::CredentialsSaveRequestPayload payload) =|
+     view_request_date_picker(u64 view_id, Utf16String input_type, Utf16String value, Utf16String minimum, Utf16String maximum) =|
+     view_request_dictionary_lookup(u64 view_id, WebView::DictionaryLookup lookup, Gfx::IntPoint position) =|
+     view_open_new_view(u64 view_id, u64 new_view_id, Hub::ViewState new_view_state, Web::HTML::ActivateTab activate_tab, Web::HTML::WebViewHints hints) =|
+diff --git a/Services/Hub/View.cpp b/Services/Hub/View.cpp
+index 16310b39..472de861 100644
+--- a/Services/Hub/View.cpp
++++ b/Services/Hub/View.cpp
+@@ -256,6 +256,11 @@ void View::forward_callbacks_to_ui(bool is_tab)
+             }
+         };
+ 
++        on_request_save_credentials = [this](Web::CredentialsSaveRequestPayload const& payload) {
++            if (auto* ui = ConnectionFromUI::the())
++                ui->async_view_request_save_credentials(view_id(), payload);
++        };
++
+         on_new_web_view = [this](Web::HTML::ActivateTab activate_tab, Web::HTML::WebViewHints hints, WebView::CanonicalTraversable& traversable) {
+             auto& view = Application::the().create_view(initial_state_for_related_view(), traversable);
+             if (auto* ui = ConnectionFromUI::the()) {
+diff --git a/UI/Qt/CMakeLists.txt b/UI/Qt/CMakeLists.txt
+index f26f17c7..2495d833 100644
+--- a/UI/Qt/CMakeLists.txt
++++ b/UI/Qt/CMakeLists.txt
+@@ -51,6 +51,7 @@ add_library(ladybird_impl STATIC
+     NotificationBar.cpp
+     PageCard.cpp
+     PerformanceMonitorWidget.cpp
++    CredentialsPrompt.cpp
+     PermissionPromptPopover.cpp
+     PictureInPictureWindow.cpp
+     PlainText.cpp
+diff --git a/UI/Qt/CredentialsPrompt.cpp b/UI/Qt/CredentialsPrompt.cpp
+new file mode 100644
+index 00000000..23a54533
+--- /dev/null
++++ b/UI/Qt/CredentialsPrompt.cpp
+@@ -0,0 +1,56 @@
++/*
++ * Copyright (c) 2026-present, the Ladybird developers.
++ *
++ * SPDX-License-Identifier: BSD-2-Clause
++ */
++
++#include "CredentialsPrompt.h"
++
++#include <QMessageBox>
++#include <QPushButton>
++
++static Ladybird::CredentialsBridgeDelegate* s_credentials_bridge_delegate { nullptr };
++
++namespace Ladybird {
++
++void set_credentials_bridge_delegate(CredentialsBridgeDelegate* delegate)
++{
++    s_credentials_bridge_delegate = delegate;
++}
++
++CredentialsBridgeDelegate* credentials_bridge_delegate()
++{
++    return s_credentials_bridge_delegate;
++}
++
++static QString qstring_from(AK::String const& string)
++{
++    auto bytes = string.to_byte_string();
++    return QString::fromUtf8(reinterpret_cast<char const*>(bytes.data()), static_cast<qsizetype>(bytes.size()));
++}
++
++void show_save_credentials_prompt(QWidget& parent, Web::CredentialsSaveRequestPayload const& payload)
++{
++    auto* dialog = new QMessageBox(&parent);
++    dialog->setAttribute(Qt::WA_DeleteOnClose);
++    dialog->setWindowTitle(QStringLiteral("Save password?"));
++    dialog->setText(QStringLiteral("Save the password for %1?").arg(qstring_from(payload.frame_origin)));
++
++    auto* save = dialog->addButton(QStringLiteral("Save"), QMessageBox::AcceptRole);
++    dialog->addButton(QStringLiteral("Not now"), QMessageBox::RejectRole);
++    auto* never = dialog->addButton(QStringLiteral("Never for this site"), QMessageBox::DestructiveRole);
++
++    QObject::connect(dialog, &QDialog::finished, dialog, [dialog, save, never, payload](int) {
++        auto* clicked = dialog->clickedButton();
++        CredentialsPromptOutcome outcome = CredentialsPromptOutcome::Dismissed;
++        if (clicked == save)
++            outcome = CredentialsPromptOutcome::Saved;
++        else if (clicked == never)
++            outcome = CredentialsPromptOutcome::NeverForSite;
++        if (auto* delegate = credentials_bridge_delegate())
++            delegate->did_decide(payload, outcome);
++    });
++    dialog->open();
++}
++
++}
+diff --git a/UI/Qt/CredentialsPrompt.h b/UI/Qt/CredentialsPrompt.h
+new file mode 100644
+index 00000000..c555d745
+--- /dev/null
++++ b/UI/Qt/CredentialsPrompt.h
+@@ -0,0 +1,37 @@
++/*
++ * Copyright (c) 2026-present, the Ladybird developers.
++ *
++ * SPDX-License-Identifier: BSD-2-Clause
++ */
++
++#pragma once
++
++#include <LibWeb/HTML/CredentialsSaveRequestPayload.h>
++
++class QWidget;
++
++namespace Ladybird {
++
++// The save prompt presents Save / Not now / Never for this site and hands the
++// outcome to the vault-backed delegate. The delegate seam keeps the UI patch
++// self-contained: whoever links the credentials bridge library registers an
++// implementation (see ladybird-keychain-bridge CredentialService::on_prompt_result).
++enum class CredentialsPromptOutcome {
++    Saved,
++    NotNow,
++    NeverForSite,
++    Dismissed,
++};
++
++class CredentialsBridgeDelegate {
++public:
++    virtual ~CredentialsBridgeDelegate() = default;
++    virtual void did_decide(Web::CredentialsSaveRequestPayload const&, CredentialsPromptOutcome) = 0;
++};
++
++void set_credentials_bridge_delegate(CredentialsBridgeDelegate*);
++CredentialsBridgeDelegate* credentials_bridge_delegate();
++
++void show_save_credentials_prompt(QWidget& parent, Web::CredentialsSaveRequestPayload const& payload);
++
++}
+diff --git a/UI/Qt/HubConnection.cpp b/UI/Qt/HubConnection.cpp
+index 5ee3832c..76395a02 100644
+--- a/UI/Qt/HubConnection.cpp
++++ b/UI/Qt/HubConnection.cpp
+@@ -243,6 +243,14 @@ void HubConnection::view_request_external_url_confirmation(u64 view_id, u64 answ
+     });
+ }
+ 
++void HubConnection::view_request_save_credentials(u64 view_id, Web::CredentialsSaveRequestPayload payload)
++{
++    auto* view = RemoteView::find(view_id);
++    if (!view || !view->on_request_save_credentials)
++        return;
++    view->on_request_save_credentials(payload);
++}
++
+ void HubConnection::view_request_permission(u64 view_id, u64 answer_id, WebView::PermissionPromptRequest request)
+ {
+     auto* view = RemoteView::find(view_id);
+diff --git a/UI/Qt/HubConnection.h b/UI/Qt/HubConnection.h
+index 079ceffc..0d414f7a 100644
+--- a/UI/Qt/HubConnection.h
++++ b/UI/Qt/HubConnection.h
+@@ -161,6 +161,7 @@ private:
+     virtual void view_request_before_unload(u64 view_id, u64 answer_id, String source) override;
+     virtual void view_request_external_url_confirmation(u64 view_id, u64 answer_id, URL::URL url, URL::Origin initiator_origin, String application_name) override;
+     virtual void view_request_permission(u64 view_id, u64 answer_id, WebView::PermissionPromptRequest request) override;
++    virtual void view_request_save_credentials(u64 view_id, Web::CredentialsSaveRequestPayload payload) override;
+     virtual void view_request_date_picker(u64 view_id, Utf16String input_type, Utf16String value, Utf16String minimum, Utf16String maximum) override;
+     virtual void view_request_dictionary_lookup(u64 view_id, WebView::DictionaryLookup lookup, Gfx::IntPoint position) override;
+     virtual void view_open_new_view(u64 view_id, u64 new_view_id, Hub::ViewState new_view_state, Web::HTML::ActivateTab activate_tab, Web::HTML::WebViewHints hints) override;
+diff --git a/UI/Qt/RemoteView.h b/UI/Qt/RemoteView.h
+index 609e4647..f740f2c2 100644
+--- a/UI/Qt/RemoteView.h
++++ b/UI/Qt/RemoteView.h
+@@ -409,6 +409,7 @@ public:
+     decltype(Hub::View::on_request_date_picker) on_request_date_picker;
+     decltype(Hub::View::on_request_permission) on_request_permission;
+     decltype(Hub::View::on_cancel_permission_prompt) on_cancel_permission_prompt;
++    decltype(Hub::View::on_request_save_credentials) on_request_save_credentials;
+     decltype(Hub::View::on_tab_indicator_change) on_tab_indicator_change;
+     Function<void(Hub::ViewState const& previous_state)> on_state_change;
+     decltype(Hub::View::on_request_file_picker) on_request_file_picker;
+diff --git a/UI/Qt/Tab.cpp b/UI/Qt/Tab.cpp
+index 206f44b5..d6593bac 100644
+--- a/UI/Qt/Tab.cpp
++++ b/UI/Qt/Tab.cpp
+@@ -20,6 +20,7 @@
+ #include <LibWebView/Utilities.h>
+ #include <LibWebView/WebContentClient.h>
+ #include <UI/Qt/Application.h>
++#include <UI/Qt/CredentialsPrompt.h>
+ #include <UI/Qt/ApplicationActions.h>
+ #include <UI/Qt/BookmarkPopover.h>
+ #include <UI/Qt/BrowserWindow.h>
+@@ -596,6 +597,10 @@ void Tab::initialize(Optional<u64> hub_view_id)
+         m_permission_prompts.cancel(request);
+     };
+ 
++    view().on_request_save_credentials = [this](Web::CredentialsSaveRequestPayload const& payload) {
++        show_save_credentials_prompt(view(), payload);
++    };
++
+     view().on_state_change = [this](Hub::ViewState const& previous_state) {
+         if (previous_state.page_mute_state != view().page_mute_state())
+             emit audio_state_changed(tab_index());

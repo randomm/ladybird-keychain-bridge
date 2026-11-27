@@ -4,5 +4,6 @@
 sha256 539256e6dfc7182908b5dcf46e92321d9bc43cc446b152157018039122cc5987  patches/ladybird/0001-form-detection.patch
 sha256 f7229f6add57c54588fb071d5656604f2cdc24567dac2c043d905713958c6959  patches/ladybird/0002-split-page-heuristic.patch
 sha256 8de079c0e97d36bcdbeadab585102a0b21dfea7fbd465f9fe4a1b5968bbab25e  patches/ladybird/0003-credentials-ipc.patch
+sha256 4f6321df1df461a8a5c9ad9ca396e288609114e4537ead0d9c14bf4f92d2a3b6  patches/ladybird/0004-save-prompt.patch
 #   git -C ../ladybird-pinned apply --check --verbose patches/ladybird/NNNN-*.patch   # per patch, clean tree
 #   sh scripts/check_patches.sh   # does all of the above

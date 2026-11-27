@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 using namespace lkb;
+using UserDecision = CredentialService::UserDecision;
 
 static char path[] = "/tmp/lkb-policy-XXXXXX";
 
@@ -127,6 +128,43 @@ int main() {
         auto crossed = service.lookup_for_origin(origin_of("https://login.example"), std::nullopt,
                                                  pt2.value());
         EXPECT(crossed.is_error());
+    }
+
+    // Save-prompt user decisions (Task 13 / M6) route exactly once.
+    {
+        auto& vault = opened.value();
+        auto req = request("https://prompt.example", "https://prompt.example");
+        auto dec = service.offer_save(req);
+        EXPECT(!dec.is_error());
+        EXPECT_EQ(static_cast<int>(dec.value().kind), static_cast<int>(SaveDecision::Kind::Save));
+
+        // NotNow: neither stored nor never-listed.
+        EXPECT(!service.on_prompt_result(req, dec.value(), UserDecision::NotNow).is_error());
+        EXPECT(vault.find(origin_of("https://prompt.example"), std::nullopt).value().empty());
+        EXPECT(!vault.is_never(origin_of("https://prompt.example")).value());
+
+        // NeverForSite: never-listed, nothing stored.
+        EXPECT(!service.on_prompt_result(req, dec.value(), UserDecision::NeverForSite).is_error());
+        EXPECT(vault.is_never(origin_of("https://prompt.example")).value());
+        EXPECT(vault.find(origin_of("https://prompt.example"), std::nullopt).value().empty());
+
+        // Save: stored exactly once.
+        auto req2 = request("https://prompt2.example", "https://prompt2.example");
+        auto dec2 = service.offer_save(req2);
+        EXPECT(!service.on_prompt_result(req2, dec2.value(), UserDecision::Save).is_error());
+        EXPECT_EQ(vault.find(origin_of("https://prompt2.example"), std::nullopt).value().size(),
+                  static_cast<size_t>(1));
+        EXPECT(!service.on_prompt_result(req2, dec2.value(), UserDecision::Save).is_error());
+        EXPECT_EQ(vault.find(origin_of("https://prompt2.example"), std::nullopt).value().size(),
+                  static_cast<size_t>(1)); // upsert, not duplicate
+
+        // A Save decision on a service-rejected policy never writes.
+        auto bad = request("https://a2.example", "https://b2.example");
+        auto rejected = service.offer_save(bad);
+        EXPECT(!rejected.is_error());
+        auto res = service.on_prompt_result(bad, rejected.value(), UserDecision::Save);
+        EXPECT(res.is_error());
+        EXPECT(vault.find(origin_of("https://a2.example"), std::nullopt).value().empty());
     }
 
     // Review Focus 1: secrets never appear in audit events.

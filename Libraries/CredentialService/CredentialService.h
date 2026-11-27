@@ -40,6 +40,11 @@ class CredentialService {
     ErrorOr<std::vector<CredentialRecord>> list(CapabilityToken const&);
     ErrorOr<void> mark_never(Origin const&);
 
+    // Save-prompt outcome from the UI (Task 13 / M6): routes the user's choice
+    // through the service exactly once.
+    enum class UserDecision { Save, NotNow, NeverForSite };
+    ErrorOr<void> on_prompt_result(SaveRequest const&, SaveDecision const&, UserDecision);
+
     ErrorOr<std::uint64_t> issue_page_token(Origin const&);
     void revoke_page_token(std::uint64_t token);
 

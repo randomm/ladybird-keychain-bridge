@@ -131,6 +131,28 @@ ErrorOr<std::vector<CredentialRecord>> CredentialService::list(CapabilityToken c
     return all;
 }
 
+ErrorOr<void> CredentialService::on_prompt_result(SaveRequest const& request,
+                                                  SaveDecision const& decision, UserDecision user) {
+    switch (user) {
+    case UserDecision::NotNow:
+        m_audit.push_back({"prompt-not-now", request.frame_origin.serialize(), 0});
+        return ErrorOr<void>::ok();
+    case UserDecision::NeverForSite: {
+        auto marked = mark_never(request.frame_origin);
+        if (marked.is_error())
+            return marked;
+        m_audit.push_back({"prompt-never", request.frame_origin.serialize(), 0});
+        return ErrorOr<void>::ok();
+    }
+    case UserDecision::Save:
+        if (decision.kind != SaveDecision::Kind::Save)
+            return ErrorOr<void>::error(
+                Error{ErrorCode::InvalidOrigin, "policy rejected this save"});
+        return save_from_form(request, decision);
+    }
+    return ErrorOr<void>::error(Error{ErrorCode::Invalid, "unknown user decision"});
+}
+
 ErrorOr<void> CredentialService::mark_never(Origin const& origin) {
     auto mark = m_vault.mark_never(origin);
     if (mark.is_error())

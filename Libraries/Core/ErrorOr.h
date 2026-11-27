@@ -65,3 +65,25 @@ private:
             return ::lkb::ErrorOr<decltype(_try_tmp.value())>::error(_try_tmp.error()); \
         std::move(_try_tmp).value();                                          \
     })
+
+namespace lkb {
+
+template<>
+class ErrorOr<void> {
+public:
+    static ErrorOr ok() { return ErrorOr {}; }
+    static ErrorOr error(Error e)
+    {
+        ErrorOr r;
+        r.m_error = std::move(e);
+        return r;
+    }
+    bool is_error() const { return m_error.has_value(); }
+    Error const& error() const { return *m_error; }
+
+private:
+    ErrorOr() = default;
+    std::optional<Error> m_error;
+};
+
+}

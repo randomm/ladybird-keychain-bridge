@@ -222,7 +222,7 @@ bool CredentialsBridgeHost::should_offer(Web::CredentialsSaveRequestPayload cons
     if (!m_impl)
         return false;
     return m_impl->host.should_offer(to_bs(payload.frame_origin), to_bs(payload.submit_action_origin),
-                                     to_bs(payload.username));
+                                     to_bs(payload.username), to_bs(payload.secret)); // secret: unchanged-credential suppression
 }
 
 void CredentialsBridgeHost::did_decide(Web::CredentialsSaveRequestPayload const& payload,

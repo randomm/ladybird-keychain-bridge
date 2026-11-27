@@ -36,12 +36,12 @@ SaveRequest make_request(Origin const& frame, Origin const& top, Origin const& a
 } // namespace
 
 bool BridgeHost::should_offer(std::string_view frame_origin, std::string_view submit_action_origin,
-                              std::string_view username) {
+                              std::string_view username, std::string_view secret) {
     auto frame = parse_origin(frame_origin);
     auto action = parse_origin(submit_action_origin);
     if (!frame.has_value() || !action.has_value())
         return false;
-    SaveRequest request = make_request(*frame, *frame, *action, username, {});
+    SaveRequest request = make_request(*frame, *frame, *action, username, secret);
     auto decision = m_service.offer_save(request);
     return !decision.is_error() && decision.value().kind == SaveDecision::Kind::Save;
 }

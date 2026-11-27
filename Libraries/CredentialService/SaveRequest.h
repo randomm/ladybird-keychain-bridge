@@ -20,7 +20,7 @@ struct SaveRequest {
 };
 
 struct SaveDecision {
-    enum class Kind { Save, Reject, NeverList };
+    enum class Kind { Save, Reject, NeverList, Unchanged };
     enum class Reason { None, CrossOriginSubmit, HttpProhibited, NeverListed };
 
     Kind kind{Kind::Reject};

@@ -41,6 +41,13 @@ int main() {
         EXPECT_EQ(rows[0].username, std::string("alice"));
     }
 
+    // 1b) submitting the SAME secret again is not re-offered (pre-filled
+    //     autofill re-submit must not nag); a changed secret still is, and so
+    //     is the 3-arg legacy offer (secret unknown at prompt time).
+    EXPECT(!host.should_offer(https, https, "alice", "hunter2"));
+    EXPECT(host.should_offer(https, https, "alice", "hunter3"));
+    EXPECT(host.should_offer(https, https, "alice"));
+
     // 2) never-for-site suppresses the offer entirely.
     host.did_decide("https://never.example", https, https, "bob", "pw",
                     BridgeHost::Outcome::NeverForSite);

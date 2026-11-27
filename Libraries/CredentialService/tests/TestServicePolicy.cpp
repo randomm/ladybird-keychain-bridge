@@ -71,6 +71,44 @@ int main() {
                  .is_error());
     }
 
+    // unchanged secret: no re-prompt for a credential the vault already holds
+    {
+        auto same = service.offer_save(request("https://login.example", "https://login.example"));
+        EXPECT(!same.is_error());
+        EXPECT_EQ(static_cast<int>(same.value().kind),
+                  static_cast<int>(SaveDecision::Kind::Unchanged));
+
+        auto changed = service.offer_save(
+            request("https://login.example", "https://login.example", "brand-new-value"));
+        EXPECT(!changed.is_error());
+        EXPECT_EQ(static_cast<int>(changed.value().kind),
+                  static_cast<int>(SaveDecision::Kind::Save));
+
+        // empty secret (offer path without a submitted secret) still prompts
+        SaveRequest bare = request("https://login.example", "https://login.example");
+        bare.secret = {};
+        auto bare_decision = service.offer_save(bare);
+        EXPECT(!bare_decision.is_error());
+        EXPECT_EQ(static_cast<int>(bare_decision.value().kind),
+                  static_cast<int>(SaveDecision::Kind::Save));
+
+        // same password under a DIFFERENT username is a new credential: prompt
+        SaveRequest other_user = request("https://login.example", "https://login.example");
+        other_user.username = "mallory";
+        auto d_user = service.offer_save(other_user);
+        EXPECT(!d_user.is_error());
+        EXPECT_EQ(static_cast<int>(d_user.value().kind),
+                  static_cast<int>(SaveDecision::Kind::Save));
+
+        // password-only submission (no username) matching a stored row: unchanged
+        SaveRequest passonly = request("https://login.example", "https://login.example");
+        passonly.username = "";
+        auto d_pass = service.offer_save(passonly);
+        EXPECT(!d_pass.is_error());
+        EXPECT_EQ(static_cast<int>(d_pass.value().kind),
+                  static_cast<int>(SaveDecision::Kind::Unchanged));
+    }
+
     // never-listed origin: silent reject (NeverList), no save
     {
         EXPECT(!service.mark_never(origin_of("https://spam.example")).is_error());

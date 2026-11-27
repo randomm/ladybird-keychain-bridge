@@ -43,6 +43,27 @@ ErrorOr<SaveDecision> CredentialService::offer_save(SaveRequest const& request) 
         decision.reason = SaveDecision::Reason::NeverListed; // silent: no prompt by contract
         return ErrorOr<SaveDecision>::ok(decision);
     }
+    // Re-submitting what the vault already holds (e.g. a pre-filled autofilled
+    // credential) must not nag: with an identical secret for this origin — and
+    // username, when the form carried one — there is nothing new to capture.
+    // An empty secret means "unknown at offer time": the prompt stays as-is.
+    if (!request.secret.empty()) {
+        std::optional<std::string_view> hint;
+        if (!request.username.empty())
+            hint = request.username;
+        auto found = m_vault.find(request.frame_origin, hint);
+        if (found.is_error())
+            return ErrorOr<SaveDecision>::error(found.error());
+        for (auto const& match : found.value()) {
+            if (match.record.secret != request.secret)
+                continue;
+            if (!request.username.empty() && match.record.username != request.username)
+                continue;
+            decision.kind = SaveDecision::Kind::Unchanged;
+            audit("save-unchanged", request.frame_origin, request.secret.size());
+            return ErrorOr<SaveDecision>::ok(decision);
+        }
+    }
     decision.kind = SaveDecision::Kind::Save;
     return ErrorOr<SaveDecision>::ok(decision);
 }

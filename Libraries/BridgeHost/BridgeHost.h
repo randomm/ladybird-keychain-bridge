@@ -45,8 +45,10 @@ class BridgeHost {
     // Save prompt (M6): the dialog opens only when the service itself would
     // accept — never-listed origins, cross-origin submits and plain-http
     // origins all decline here, before any widget exists.
+    // secret is the submitted password when known at prompt time (the browser
+    // host always has it); an empty secret keeps the legacy "unknown" behavior.
     bool should_offer(std::string_view frame_origin, std::string_view submit_action_origin,
-                      std::string_view username);
+                      std::string_view username, std::string_view secret = {});
     void did_decide(std::string_view frame_origin, std::string_view top_level_origin,
                     std::string_view submit_action_origin, std::string_view username,
                     std::string_view secret, Outcome outcome);

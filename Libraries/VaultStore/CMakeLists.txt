@@ -5,3 +5,7 @@ target_include_directories(lkb_vault PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_executable(TestVaultStore tests/TestVaultStore.cpp)
 target_link_libraries(TestVaultStore PRIVATE lkb_vault)
 add_test(NAME TestVaultStore COMMAND TestVaultStore)
+
+add_executable(TestVaultMerge tests/TestVaultMerge.cpp)
+target_link_libraries(TestVaultMerge PRIVATE lkb_vault)
+add_test(NAME TestVaultMerge COMMAND TestVaultMerge)

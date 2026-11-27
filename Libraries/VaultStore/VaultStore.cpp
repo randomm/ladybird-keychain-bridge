@@ -128,6 +128,13 @@ ErrorOr<VaultStore> VaultStore::open(std::string db_path, ByteBuffer master_key)
         sqlite3_close(db);
         return ErrorOr<VaultStore>::error(db_error("create table"));
     }
+    if (!exec("CREATE TABLE IF NOT EXISTS never_saved("
+              "scheme TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,"
+              "PRIMARY KEY (scheme, host, port));")) {
+        sqlite3_free(err);
+        sqlite3_close(db);
+        return ErrorOr<VaultStore>::error(db_error("create never_saved"));
+    }
     if (version == 0 && !exec("PRAGMA user_version=1;")) {
         sqlite3_free(err);
         sqlite3_close(db);
@@ -284,7 +291,8 @@ ErrorOr<void> VaultStore::put(CredentialRecord const& record) {
             return ErrorOr<void>::error(db_error("prepare put update"));
         sqlite3_bind_blob(upd, 1, blob.value().data(), static_cast<int>(blob.value().size()),
                           SQLITE_TRANSIENT);
-        sqlite3_bind_int64(upd, 2, static_cast<std::int64_t>(std::time(nullptr)));
+        auto upd_now = static_cast<std::int64_t>(std::time(nullptr));
+        sqlite3_bind_int64(upd, 2, record.updated > 0 ? record.updated : upd_now);
         sqlite3_bind_int64(upd, 3, existing_id);
         int rc = sqlite3_step(upd);
         sqlite3_finalize(upd);
@@ -312,6 +320,46 @@ ErrorOr<void> VaultStore::put(CredentialRecord const& record) {
     sqlite3_finalize(ins);
     if (rc != SQLITE_DONE)
         return ErrorOr<void>::error(db_error("put insert"));
+    return ErrorOr<void>::ok();
+}
+
+ErrorOr<void> VaultStore::mark_never(Origin const& origin) {
+    sqlite3_stmt* stmt = prepare_or_null(
+        m_db, "INSERT OR REPLACE INTO never_saved(scheme, host, port) VALUES(?,?,?);");
+    if (!stmt)
+        return ErrorOr<void>::error(db_error("prepare mark_never"));
+    int idx = 1;
+    bind_origin(stmt, idx, origin);
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE)
+        return ErrorOr<void>::error(db_error("mark_never"));
+    return ErrorOr<void>::ok();
+}
+
+ErrorOr<bool> VaultStore::is_never(Origin const& origin) {
+    sqlite3_stmt* stmt =
+        prepare_or_null(m_db, "SELECT 1 FROM never_saved WHERE scheme=? AND host=? AND port=?;");
+    if (!stmt)
+        return ErrorOr<bool>::error(db_error("prepare is_never"));
+    int idx = 1;
+    bind_origin(stmt, idx, origin);
+    bool found = sqlite3_step(stmt) == SQLITE_ROW;
+    sqlite3_finalize(stmt);
+    return ErrorOr<bool>::ok(found);
+}
+
+ErrorOr<void> VaultStore::unmark_never(Origin const& origin) {
+    sqlite3_stmt* stmt =
+        prepare_or_null(m_db, "DELETE FROM never_saved WHERE scheme=? AND host=? AND port=?;");
+    if (!stmt)
+        return ErrorOr<void>::error(db_error("prepare unmark_never"));
+    int idx = 1;
+    bind_origin(stmt, idx, origin);
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE)
+        return ErrorOr<void>::error(db_error("unmark_never"));
     return ErrorOr<void>::ok();
 }
 

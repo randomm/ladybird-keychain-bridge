@@ -30,6 +30,9 @@ class VaultStore {
     ErrorOr<void> remove_credential(std::int64_t id);
     ErrorOr<std::vector<CredentialRecord>> all(size_t& out_undecodable);
     ErrorOr<void> remove_origin(Origin const& origin);
+    ErrorOr<void> mark_never(Origin const& origin);
+    ErrorOr<bool> is_never(Origin const& origin);
+    ErrorOr<void> unmark_never(Origin const& origin);
 
   private:
     VaultStore() = default;

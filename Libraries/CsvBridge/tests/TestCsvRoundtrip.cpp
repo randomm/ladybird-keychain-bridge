@@ -137,6 +137,75 @@ int main() {
             EXPECT_EQ(static_cast<int>(res.error().code), static_cast<int>(ErrorCode::TooLarge));
     }
 
+    // Hostile header keys must not poison the export (formula/control injection).
+    {
+        std::string csv =
+            "Title,Username,Password,URL,\"=SUM(1,1)\"\nx,alice,pw,https://hdr.example/,v\n";
+        ByteBuffer b(csv.begin(), csv.end());
+        wipe_db();
+        auto v = VaultStore::open(path, key());
+        auto res = import_csv(b, v.value());
+        EXPECT(res.is_error());
+        if (res.is_error())
+            EXPECT_EQ(static_cast<int>(res.error().code),
+                      static_cast<int>(ErrorCode::MalformedCsv));
+    }
+    {
+        std::string csv =
+            "Title,Username,Password,URL,\"a\nb\"\nx,alice,pw,https://hdr2.example/,v\n";
+        ByteBuffer b(csv.begin(), csv.end());
+        wipe_db();
+        auto v = VaultStore::open(path, key());
+        auto res = import_csv(b, v.value());
+        EXPECT(res.is_error());
+        if (res.is_error())
+            EXPECT_EQ(static_cast<int>(res.error().code),
+                      static_cast<int>(ErrorCode::MalformedCsv));
+    }
+    {
+        std::string longh(129, 'x');
+        std::string csv =
+            "Title,Username,Password,URL," + longh + "\nx,alice,pw,https://hdr3.example/,v\n";
+        ByteBuffer b(csv.begin(), csv.end());
+        wipe_db();
+        auto v = VaultStore::open(path, key());
+        auto res = import_csv(b, v.value());
+        EXPECT(res.is_error());
+        if (res.is_error())
+            EXPECT_EQ(static_cast<int>(res.error().code), static_cast<int>(ErrorCode::TooLarge));
+    }
+
+    // Tab-prefixed extra value is formula-escaped on export.
+    {
+        CredentialRecord r;
+        r.origin = Origin::parse("https://tab.example").value();
+        r.username = "tabuser";
+        std::string sec = "s";
+        r.secret = ByteBuffer(sec.begin(), sec.end());
+        r.extra_fields["Notes"] = std::string("\tpwn");
+        EXPECT(!vault2.put(r).is_error());
+        auto e4 = export_csv(vault2);
+        std::string s4(e4.value().begin(), e4.value().end());
+        EXPECT(s4.find("'\tpwn") != std::string::npos);
+    }
+
+    // Overflowing unix-seconds digits fall back to import time, never to a
+    // wrapped negative (19 digits above INT64_MAX).
+    {
+        std::string csv = "Title,Username,Password,URL,Created\nx,alice,pw,https://ovf.example/"
+                          ",9223372036854775808\n";
+        ByteBuffer b(csv.begin(), csv.end());
+        wipe_db();
+        auto v = VaultStore::open(path, key());
+        auto res = import_csv(b, v.value());
+        EXPECT(!res.is_error());
+        size_t und = 0;
+        auto recs = v.value().all(und);
+        EXPECT(!recs.is_error());
+        if (!recs.is_error() && !recs.value().empty())
+            EXPECT(recs.value()[0].created > 0);
+    }
+
     wipe_db();
     return ::lkb::failures();
 }

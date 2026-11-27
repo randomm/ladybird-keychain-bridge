@@ -32,7 +32,7 @@ fi
 
 echo "== offline doctrine =="
 if grep -REn --include=CMakeLists.txt --include='*.cmake' \
-        -e 'FetchContent' -e 'ExternalProject' -e 'file\(DOWNLOAD' . 2>/dev/null; then
+        -i -e 'FetchContent' -e 'ExternalProject' -e 'file\(DOWNLOAD' . 2>/dev/null; then
     echo "FAIL: networked cmake construct (offline doctrine)"
     fail=1
 fi

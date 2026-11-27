@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <ctime>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -106,7 +107,10 @@ bool parse_i64(std::string const& s, std::int64_t& out) {
     for (char c : s) {
         if (c < '0' || c > '9')
             return false;
-        v = v * 10 + (c - '0');
+        int d = c - '0';
+        if (v > (std::numeric_limits<std::int64_t>::max() - d) / 10)
+            return false;
+        v = v * 10 + d;
     }
     out = v;
     return true;
@@ -115,7 +119,7 @@ bool parse_i64(std::string const& s, std::int64_t& out) {
 std::string escape_formula(std::string const& text) {
     if (!text.empty()) {
         char c = text[0];
-        if (c == '=' || c == '+' || c == '-' || c == '@')
+        if (c == '=' || c == '+' || c == '-' || c == '@' || c == '\t' || c == '\r')
             return "'" + text;
     }
     return text;
@@ -162,8 +166,20 @@ ErrorOr<size_t> import_csv(ByteBuffer const& csv, VaultStore& vault) {
         return ErrorOr<size_t>::error(csv_err("row cap exceeded", ErrorCode::TooLarge));
 
     std::vector<std::string> header;
-    for (auto& h : data[0].fields)
+    for (auto& h : data[0].fields) {
+        // Header names re-emitted on export must be safe text: bound length, forbid
+        // control characters, quotes, and formula-leading prefixes.
+        if (h.size() > 128)
+            return ErrorOr<size_t>::error(Error{ErrorCode::TooLarge, "header field too large"});
+        for (unsigned char ch : h) {
+            if (ch < 0x20 || ch == '"')
+                return ErrorOr<size_t>::error(
+                    Error{ErrorCode::MalformedCsv, "hostile header field"});
+        }
+        if (!h.empty() && (h[0] == '=' || h[0] == '+' || h[0] == '-' || h[0] == '@'))
+            return ErrorOr<size_t>::error(Error{ErrorCode::MalformedCsv, "hostile header field"});
         header.push_back(lower(h));
+    }
 
     int col_username = -1, col_password = -1, col_url = -1;
     int col_created = -1, col_updated = -1, col_lastused = -1;
@@ -272,7 +288,7 @@ ErrorOr<ByteBuffer> export_csv(VaultStore& vault) {
     for (size_t i = 0; i < header.size(); ++i) {
         if (i)
             out += ',';
-        out += header[i];
+        out += quote_cell(header[i]);
     }
     out += "\n";
 

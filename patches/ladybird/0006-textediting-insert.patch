@@ -1,0 +1,164 @@
+From ladybird-keychain-bridge patch-set — apply with `git apply` on the pinned Ladybird tree (09fa4834) after 0001-0004.
+0006: TextEditingCommand::InsertText — user-activated credential injection (M7b).
+
+diff --git a/Libraries/LibWeb/Page/EventHandler.cpp b/Libraries/LibWeb/Page/EventHandler.cpp
+--- a/Libraries/LibWeb/Page/EventHandler.cpp
++++ b/Libraries/LibWeb/Page/EventHandler.cpp
+@@ -1981,6 +1981,24 @@
+         if (!target->deletion_target_range(input_type))
+             return EventResult::Handled;
+         target->handle_delete(input_type);
++        break;
++    }
++    case Type::InsertText: {
++        // ladybird-keychain-bridge (M7b): credential injection asked for by the
++        // user clicking a suggestion. Sites must see it like typing: cancelable
++        // beforeinput, then the target's insert hook fires the synchronous
++        // input event; change rides the normal commit path (blur/commit).
++        if (command.text.is_empty())
++            break;
++        GC::Root<DOM::Document> rooted_document { document };
++        GC::Root<JS::Cell> rooted_target { target->as_cell() };
++        GC::Root<DOM::Node> scope { target->mouse_selection_scope() };
++        FIRE(input_event(UIEvents::EventNames::beforeinput, UIEvents::InputTypes::insertText, m_navigable, command.text));
++        if (m_navigable->active_document() != document || !document->is_fully_active()
++            || document->active_input_events_target() != target || !scope || !scope->is_connected()
++            || target->mouse_selection_scope().ptr() != scope.ptr())
++            return EventResult::Handled;
++        target->handle_insert(UIEvents::InputTypes::insertText, command.text);
+         break;
+     }
+     default:
+diff --git a/Libraries/LibWeb/Page/Page.cpp b/Libraries/LibWeb/Page/Page.cpp
+--- a/Libraries/LibWeb/Page/Page.cpp
++++ b/Libraries/LibWeb/Page/Page.cpp
+@@ -700,6 +700,18 @@
+     return navigable->event_handler().handle_keydown(key, modifiers, code_point, repeat, should_insert_text, async_scroll_performed_default_action, editing_commands, native_editing_binding_resolved);
+ }
+ 
++bool Page::handle_text_editing_command_from_ui(TextEditingCommand const& command)
++{
++    // ladybird-keychain-bridge (M7b): the UI injects a user-chosen credential
++    // into the focused field only after a real click on a suggestion. Reuses
++    // the native command path so the site observes beforeinput/input like typing.
++    auto navigable = hosted_focused_navigable();
++    if (!navigable)
++        return false;
++    auto result = navigable->event_handler().handle_text_editing_command(command);
++    return result == EventResult::Handled || result == EventResult::Accepted;
++}
++
+ EventResult Page::handle_keyup(UIEvents::KeyCode key, unsigned modifiers, u32 code_point, bool repeat)
+ {
+     auto navigable = hosted_focused_navigable();
+diff --git a/Libraries/LibWeb/Page/Page.h b/Libraries/LibWeb/Page/Page.h
+--- a/Libraries/LibWeb/Page/Page.h
++++ b/Libraries/LibWeb/Page/Page.h
+@@ -244,6 +244,8 @@
+     EventResult handle_pinch_event(DevicePixelPoint point, unsigned modifiers, double scale);
+ 
+     EventResult handle_keydown(UIEvents::KeyCode, unsigned modifiers, u32 code_point, bool repeat, bool should_insert_text, bool async_scroll_performed_default_action = false, ReadonlySpan<TextEditingCommand> editing_commands = {}, bool native_editing_binding_resolved = false, Optional<u64> user_input_scroll_count_with_nothing_to_scroll = {});
++
++    bool handle_text_editing_command_from_ui(TextEditingCommand const&);
+     EventResult handle_keyup(UIEvents::KeyCode, unsigned modifiers, u32 code_point, bool repeat);
+ 
+     void handle_gamepad_connected(Gamepad::GamepadDescription const&);
+diff --git a/Libraries/LibWebCommon/Page/TextEditingCommand.h b/Libraries/LibWebCommon/Page/TextEditingCommand.h
+--- a/Libraries/LibWebCommon/Page/TextEditingCommand.h
++++ b/Libraries/LibWebCommon/Page/TextEditingCommand.h
+@@ -7,6 +7,7 @@
+ #pragma once
+ 
+ #include <AK/Types.h>
++#include <AK/Utf16String.h>
+ 
+ namespace Web {
+ 
+@@ -31,10 +32,12 @@
+         DeleteWordBackward,
+         DeleteWordForward,
+         DeleteToEndOfParagraph,
++        InsertText,
+     };
+ 
+     Type type { Type::MoveBackward };
+     bool extend_selection { false };
++    Utf16String text;
+ 
+     bool operator==(TextEditingCommand const&) const = default;
+ };
+diff --git a/Libraries/LibWebCommon/Page/TextEditingCommand.ipc b/Libraries/LibWebCommon/Page/TextEditingCommand.ipc
+--- a/Libraries/LibWebCommon/Page/TextEditingCommand.ipc
++++ b/Libraries/LibWebCommon/Page/TextEditingCommand.ipc
+@@ -26,10 +26,12 @@
+     DeleteWordBackward,
+     DeleteWordForward,
+     DeleteToEndOfParagraph,
++    InsertText,
+ }
+ 
+ [ExistingCpp]
+ struct Web::TextEditingCommand {
+     Web::TextEditingCommand::Type type;
+     bool extend_selection;
++    Utf16String text;
+ }
+diff --git a/Services/WebContent/ConnectionFromClient.cpp b/Services/WebContent/ConnectionFromClient.cpp
+--- a/Services/WebContent/ConnectionFromClient.cpp
++++ b/Services/WebContent/ConnectionFromClient.cpp
+@@ -118,6 +118,7 @@
+ #include <WebContent/WebContentCompositorHost.h>
+ #include <WebContent/WebDriverBiDi.h>
+ #include <WebContent/Worker/WorkerThread.h>
++#include <LibWebCommon/Page/TextEditingCommand.h>
+ 
+ namespace WebContent {
+ 
+@@ -987,6 +988,24 @@
+     enqueue_input_event({ page_id, move(event), {}, {} });
+ }
+ 
++void ConnectionFromClient::insert_text(Web::PageId page_id, Web::TextEditingCommand command)
++{
++    // ladybird-keychain-bridge (M7b): UI-delivered credential injection; the UI
++    // only ever sends this after a real click on a credential suggestion.
++    auto client = page(page_id);
++    if (!client.has_value())
++        return;
++    (void)client->page().handle_text_editing_command_from_ui(move(command));
++}
++
++void ConnectionFromClient::credential_selected(Web::PageId page_id, u64 suggestion_id)
++{
++    // The UI committed to a suggestion; the fill itself rides insert_text.
++    // Nothing else to do in WebContent — an unknown page is dropped by design.
++    (void)page_id;
++    (void)suggestion_id;
++}
++
+ void ConnectionFromClient::mouse_event(Web::PageId page_id, Web::MouseEvent event)
+ {
+     enqueue_mouse_event(page_id, {}, move(event));
+diff --git a/Services/WebContent/ConnectionFromClient.h b/Services/WebContent/ConnectionFromClient.h
+--- a/Services/WebContent/ConnectionFromClient.h
++++ b/Services/WebContent/ConnectionFromClient.h
+@@ -173,6 +173,8 @@
+     virtual void set_viewport_is_fullscreen(Web::PageId page_id, Web::ViewportIsFullscreen is_fullscreen) override;
+     virtual void deny_fullscreen_window(Web::PageId page_id) override;
+     virtual void key_event(Web::PageId page_id, Web::KeyEvent) override;
++    virtual void insert_text(Web::PageId page_id, Web::TextEditingCommand command) override;
++    virtual void credential_selected(Web::PageId page_id, u64 suggestion_id) override;
+     virtual void mouse_event(Web::PageId page_id, Web::MouseEvent) override;
+     virtual void mouse_event_in_hosted_root(Web::PageId page_id, Web::HTML::CrossProcessId navigable_id, Web::MouseEvent) override;
+     virtual void drag_event(Web::PageId page_id, Web::DragEvent) override;
+diff --git a/Services/WebContent/WebContentServer.ipc b/Services/WebContent/WebContentServer.ipc
+--- a/Services/WebContent/WebContentServer.ipc
++++ b/Services/WebContent/WebContentServer.ipc
+@@ -157,6 +157,7 @@
+     deny_fullscreen_window(Web::PageId page_id) =|
+ 
+     key_event(Web::PageId page_id, Web::KeyEvent event) =|
++    insert_text(Web::PageId page_id, Web::TextEditingCommand command) =|
+     mouse_event(Web::PageId page_id, Web::MouseEvent event) =|
+     mouse_event_in_hosted_root(Web::PageId page_id, Web::HTML::CrossProcessId navigable_id, Web::MouseEvent event) =|
+     pinch_event_in_hosted_root(Web::PageId page_id, Web::HTML::CrossProcessId navigable_id, Web::PinchEvent event) =|

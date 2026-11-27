@@ -233,7 +233,8 @@ ErrorOr<std::vector<Match>> VaultStore::find(Origin const& origin,
                                              std::optional<std::string_view> username_hint) {
     sqlite3_stmt* stmt =
         prepare_or_null(m_db, "SELECT id, blob, created, last_used, updated FROM credentials"
-                              " WHERE scheme=? AND host=? AND port=?;");
+                              " WHERE scheme=? AND host=? AND port=?"
+                              " ORDER BY last_used DESC, updated DESC;");
     if (!stmt)
         return ErrorOr<std::vector<Match>>::error(db_error("prepare find"));
 

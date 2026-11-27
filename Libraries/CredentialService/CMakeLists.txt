@@ -9,3 +9,7 @@ add_test(NAME TestCapabilityToken COMMAND TestCapabilityToken)
 add_executable(TestServicePolicy tests/TestServicePolicy.cpp)
 target_link_libraries(TestServicePolicy PRIVATE lkb_service)
 add_test(NAME TestServicePolicy COMMAND TestServicePolicy)
+
+add_executable(TestAutofill tests/TestAutofill.cpp)
+target_link_libraries(TestAutofill PRIVATE lkb_service)
+add_test(NAME TestAutofill COMMAND TestAutofill)

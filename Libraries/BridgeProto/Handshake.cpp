@@ -15,6 +15,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <set>
 #include <vector>
@@ -271,7 +272,12 @@ Handshake::start_client(std::string caller_bundle_id, std::string priv_hex, std:
 namespace {
 
 std::mutex g_nonce_mutex;
+// Insertion order is tracked alongside the lookup set so the bound evicts the
+// OLDEST seen nonces — a full clear() on overflow would reopen a replay window
+// for every nonce accepted before the clear.
+constexpr size_t nonce_cache_capacity = 1024;
 std::set<std::string> g_seen_nonces;
+std::deque<std::string> g_seen_nonce_order;
 
 bool valid_nonce_hex(std::string const& s) {
     if (s.empty() || s.size() > 128 || s.size() % 2 != 0)
@@ -310,11 +316,13 @@ Handshake::accept_hello(HelloMsg const& hello, std::string peer_identity, std::s
         std::lock_guard<std::mutex> lock(g_nonce_mutex);
         if (!g_seen_nonces.insert(hello.nonce_hex).second)
             return ErrorOr<ServerSide>::error(hs_err("replayed nonce"));
-        if (g_seen_nonces.size() > 1024) {
-            // Bound the cache: replay protection is best-effort across the
-            // last 1024 hello nonces of this process.
-            g_seen_nonces.clear();
-            g_seen_nonces.insert(hello.nonce_hex);
+        g_seen_nonce_order.push_back(hello.nonce_hex);
+        // Bound the cache: replay protection is best-effort across the last
+        // nonce_cache_capacity hello nonces of this process, oldest evicted
+        // first — never a wholesale clear (that would re-open every old nonce).
+        while (g_seen_nonce_order.size() > nonce_cache_capacity) {
+            g_seen_nonces.erase(g_seen_nonce_order.front());
+            g_seen_nonce_order.pop_front();
         }
     }
 
@@ -395,6 +403,7 @@ bool Handshake::verify_confirmation(ByteBuffer const& session_key, bool is_serve
 void Handshake::reset_nonce_cache_for_tests() {
     std::lock_guard<std::mutex> lock(g_nonce_mutex);
     g_seen_nonces.clear();
+    g_seen_nonce_order.clear();
 }
 
 } // namespace lkb

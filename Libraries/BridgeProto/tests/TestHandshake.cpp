@@ -152,5 +152,37 @@ int main() {
                       static_cast<int>(ErrorCode::Handshake));
     }
 
+    // Overflow must evict the OLDEST nonces, never the whole set: clearing on
+    // overflow turns the bound into a replay window — every nonce accepted
+    // before the clear (including very recent ones) becomes acceptable again.
+    // A nonce inside the last-capacity window must stay rejected across the
+    // overflow point.
+    {
+        Handshake::reset_nonce_cache_for_tests();
+        auto make_hello = [](std::string nonce) {
+            auto c = Handshake::start_client("com.example.ladybird", {}, std::move(nonce));
+            EXPECT(!c.is_error());
+            if (c.is_error())
+                return HelloMsg{};
+            return c.value().hello;
+        };
+        auto doubled = [](int i) {
+            auto s = std::to_string(i);
+            return s + s; // doubled: distinct per i, even length, hex digits
+        };
+        HelloMsg recent{};
+        for (int i = 0; i < 1050; ++i) {
+            auto hello = make_hello(doubled(i));
+            if (i == 900)
+                recent = hello;
+            auto ok = Handshake::accept_hello(hello, peer_identity);
+            EXPECT(!ok.is_error()); // all distinct — none may be refused as replay
+        }
+        // The cache overflowed past its bound during the loop; nonce #900 is
+        // well inside the last-capacity window, so it must still be remembered.
+        auto replay = Handshake::accept_hello(recent, peer_identity);
+        EXPECT(replay.is_error());
+    }
+
     return ::lkb::failures();
 }

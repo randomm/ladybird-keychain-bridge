@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -48,6 +49,12 @@ class CredentialService {
     ErrorOr<std::uint64_t> issue_page_token(Origin const&);
     void revoke_page_token(std::uint64_t token);
 
+    // navigator.credentials.get()/preventSilentAccess() policy (M8): exact-origin
+    // match only — a subdomain is a different origin and never matches — and the
+    // per-origin preventSilentAccess flag blocks answers to non-silent callers.
+    ErrorOr<std::optional<Match>> js_get(Origin const&, bool allow_silent);
+    ErrorOr<void> set_prevent_silent_access(Origin const&, bool);
+
     std::vector<AuditEvent> const& audit_log() const { return m_audit; }
     Capabilities capabilities() const;
 
@@ -58,6 +65,7 @@ class CredentialService {
     Clock& m_clock;
     std::vector<AuditEvent> m_audit;
     std::map<std::uint64_t, std::pair<Origin, std::int64_t>> m_page_tokens;
+    std::map<std::string, bool> m_prevent_silent; // keyed by origin.serialize()
     std::uint64_t m_next_page_token{1};
 };
 

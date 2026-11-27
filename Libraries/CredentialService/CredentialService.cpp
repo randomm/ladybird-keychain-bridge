@@ -165,4 +165,24 @@ Capabilities CredentialService::capabilities() const {
     return Capabilities{};
 }
 
+ErrorOr<std::optional<Match>> CredentialService::js_get(Origin const& origin, bool allow_silent) {
+    auto it = m_prevent_silent.find(origin.serialize());
+    if (!allow_silent && it != m_prevent_silent.end() && it->second)
+        return ErrorOr<std::optional<Match>>::error(
+            {ErrorCode::Unauthorized, "silent access prevented for this origin"});
+
+    auto found = m_vault.find(origin, std::nullopt);
+    if (found.is_error())
+        return ErrorOr<std::optional<Match>>::error(found.error());
+    if (found.value().empty())
+        return ErrorOr<std::optional<Match>>::ok(
+            std::nullopt); // exact-origin miss: silence, not error
+    return ErrorOr<std::optional<Match>>::ok(found.value().front()); // most recently used first
+}
+
+ErrorOr<void> CredentialService::set_prevent_silent_access(Origin const& origin, bool prevent) {
+    m_prevent_silent[origin.serialize()] = prevent;
+    return ErrorOr<void>::ok();
+}
+
 } // namespace lkb

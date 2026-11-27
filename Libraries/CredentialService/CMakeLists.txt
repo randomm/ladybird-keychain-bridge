@@ -13,3 +13,7 @@ add_test(NAME TestServicePolicy COMMAND TestServicePolicy)
 add_executable(TestAutofill tests/TestAutofill.cpp)
 target_link_libraries(TestAutofill PRIVATE lkb_service)
 add_test(NAME TestAutofill COMMAND TestAutofill)
+
+add_executable(TestJsCredentials tests/TestJsCredentials.cpp)
+target_link_libraries(TestJsCredentials PRIVATE lkb_service)
+add_test(NAME TestJsCredentials COMMAND TestJsCredentials)

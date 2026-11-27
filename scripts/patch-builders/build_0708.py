@@ -55,7 +55,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ak::Utf16String;
-use libjs_rust::api::{ErrorKind, ErrorType, GcWeak, Object, PromiseCapability, Trace, Value, Vm};
+use libjs_rust::api::{ErrorKind, ErrorType, GcWeak, PromiseCapability, Trace, Value, Vm};
 use liburl_rust::origin::Origin;
 
 use super::credential::{AnyCredential, CredentialData, CredentialMediationRequirement};
@@ -70,6 +70,7 @@ use crate::bindings::{CallContext, Exception, WebIdlResult};
 use crate::dom::abort_signal::AbortSignal;
 
 /// https://w3c.github.io/webappsec-credential-management/#dictdef-credentialrequestoptions
+#[expect(dead_code, reason = "get() does not read the options yet")]
 pub(crate) struct CredentialRequestOptions {
     pub(crate) federated: Option<FederatedCredentialRequestOptions>,
     pub(crate) mediation: CredentialMediationRequirement,
@@ -90,7 +91,7 @@ thread_local! {
     /// In-flight get() promises awaiting the vault-backed answer that the UI process hands over
     /// through resolve_js_get_credentials. Held weakly: if the page (and with it the promise)
     /// is collected before the answer arrives, the entry settles itself on the next prune.
-    static PENDING_GET: RefCell<HashMap<u64, (GcWeak<PromiseCapability>, Origin)>> = const { RefCell::new(HashMap::new()) };
+    static PENDING_GET: RefCell<HashMap<u64, (GcWeak<PromiseCapability>, Origin)>> = RefCell::new(HashMap::new());
 }
 static NEXT_GET_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -251,7 +252,7 @@ pub unsafe extern "C" fn web_rust_credentials_get_resolved(
         password: UsvString::from_utf8(secret),
     };
     match create_password_credential_from_data(vm, data, origin) {
-        Ok(credential) => resolve_promise(vm, promise, Value::from_object(credential.upcast::<Object>())),
+        Ok(credential) => resolve_promise(vm, promise, Value::from_object(credential)),
         Err(exception) => reject_promise_with_exception(vm, promise, exception),
     }
 }
@@ -713,7 +714,7 @@ void HubConnection::view_request_js_get_credentials(u64 view_id, u64 request_id,
     if (!view || !view->on_request_js_get_credentials) {
         // The answer contract with the page: every request is settled. A dead
         // view cannot answer, so the Hub settles it here as not-found.
-        async_view_answer_js_get_credentials(view_id, request_id, false, {}, {});
+        async_view_answer_js_get_credentials(view_id, request_id, false, Utf16View {}, Utf16View {});
         return;
     }
     view->on_request_js_get_credentials(request_id, origin, allow_silent, password_requested);
@@ -778,12 +779,12 @@ edit("UI/Qt/Tab.cpp",
         // Same-origin rule as the popup and the save prompt: only answer for the
         // page this tab actually shows.
         if (Utf16String::from_utf8(view().url().origin().serialize()) != origin) {
-            HubConnection::the().async_view_answer_js_get_credentials(view().view_id(), request_id, false, {}, {});
+            HubConnection::the().async_view_answer_js_get_credentials(view().view_id(), request_id, false, Utf16View {}, Utf16View {});
             return;
         }
         auto* delegate = Ladybird::credentials_bridge_delegate();
         if (!delegate) {
-            HubConnection::the().async_view_answer_js_get_credentials(view().view_id(), request_id, false, {}, {});
+            HubConnection::the().async_view_answer_js_get_credentials(view().view_id(), request_id, false, Utf16View {}, Utf16View {});
             return;
         }
         delegate->js_get_credentials(origin, allow_silent, password_requested, [this, request_id](bool found, Utf16String username, Utf16String secret) {
@@ -1171,7 +1172,7 @@ void CredentialSettingsPage::load_credentials()
             entry.set("origin"_string, json_string(row.origin));
             entry.set("username"_string, json_string(row.username));
             entry.set("id"_string, JsonValue { row.id });
-            rows.append(move(entry));
+            MUST(rows.append(move(entry)));
         }
     }
     JsonObject payload;

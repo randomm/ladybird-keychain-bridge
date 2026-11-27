@@ -1,13 +1,9 @@
-# Ladybird patch set — applies against 09fa48340dc54458a50ba524398fa4011eba3637
-# Apply order is numeric; this set is a STACK — never apply out of order. Verify:
-#   sh scripts/sync_ladybird.sh   # asserts HEAD == pinned sha
-#   sh scripts/check_patches.sh   # stacked apply-check, restores tree
 sha256 56023fe355c92b9d8b970540f2d10040a3877fe5ee3441337015e1ad9fae5676  patches/ladybird/0001-form-detection.patch
 sha256 f6e930b0a6efd0bec6a1f7343b04a0dabd52e5f8bb083889056e4275e53e0264  patches/ladybird/0002-split-page-heuristic.patch
 sha256 35995aa627665d00f430704630f8ac5f29579874987d3a7dc8f50f4e4b7a5c66  patches/ladybird/0003-credentials-ipc.patch
-sha256 34e1f79270125faf49800a7bfed318b01d36246d57b40219a0baf9f5c9f911ee  patches/ladybird/0004-save-prompt.patch
+sha256 edd058d32b4b2790e33a49ed10b2061fc5eaa078e8e65f1387ea7b8fab67e715  patches/ladybird/0004-save-prompt.patch
 sha256 a36e8a6e8eb808fff0ae558ac5fed00bcdefc309485f8033d424d997fc8ec005  patches/ladybird/0005-autofill-popup.patch
-sha256 96314a62ad4b5cb9594514fa2d7d1a8754dbd77cd0c535e81b9a31e0e3080535  patches/ladybird/0006-textediting-insert.patch
-sha256 ee5a0e296707f1c40fb99b613adb57319f55e0a0cfaa462b0cb0dd1734ddc027  patches/ladybird/0007-credentials-container.patch
-sha256 1bfc6ba4b3eac06569ad232bd7208a71ce79f1d8e2035b6e3f94f5020abf6ee1  patches/ladybird/0008-credential-settings-webui.patch
+sha256 0846f3892edf9a7f2d878aa0f032de02d60c421fe631afd45dd12229b1da77da  patches/ladybird/0006-textediting-insert.patch
+sha256 2e5e574e45831ef251a0c3cc1d86e41968b59dd2a6ad68ef34bbcdd4356dd546  patches/ladybird/0007-credentials-container.patch
+sha256 34361969787d17a5f8aba0439273c1c1f1ff5f958d7889d4f141b1a16004e5d1  patches/ladybird/0008-credential-settings-webui.patch
 sha256 a70ca658264af629eed207727eadfc8d6df7f9c144465e07fb636e7a82bba9ab  patches/ladybird/0009-bridge-host.patch

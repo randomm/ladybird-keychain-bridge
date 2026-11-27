@@ -409,6 +409,18 @@ void ConnectionFromUI::view_select_credential(u64 view_id, u64 suggestion_id, Ut
         view->select_credential(suggestion_id, move(secret), fill_token);
 }""", "0005")
 
+edit("UI/Qt/NativeTextEditingLineEdit.cpp",
+     "    switch (command.type) {\n    case Type::MoveBackward:",
+     """    switch (command.type) {
+    case Type::InsertText:
+        if (!isReadOnly())
+            insert(qstring_from_utf16_string(command.text));
+        break;
+    case Type::MoveBackward:""", "0006")
+edit("UI/Qt/NativeTextEditingLineEdit.cpp",
+     "include <UI/Qt/NativeTextEditingLineEdit.h>\n\n#ifdef AK_OS_MACOS",
+     "include <UI/Qt/NativeTextEditingLineEdit.h>\n#include <UI/Qt/StringUtils.h>\n\n#ifdef AK_OS_MACOS", "0006")
+
 edit("UI/Qt/RemoteView.h",
      "    decltype(Hub::View::on_request_save_credentials) on_request_save_credentials;",
      """    decltype(Hub::View::on_request_save_credentials) on_request_save_credentials;

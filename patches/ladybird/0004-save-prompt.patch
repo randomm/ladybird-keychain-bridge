@@ -135,7 +135,7 @@ new file mode 100644
 +static QString qstring_from(AK::String const& string)
 +{
 +    auto bytes = string.to_byte_string();
-+    return QString::fromUtf8(reinterpret_cast<char const*>(bytes.data()), static_cast<qsizetype>(bytes.size()));
++    return QString::fromUtf8(bytes.characters(), static_cast<qsizetype>(bytes.size()));
 +}
 +
 +void show_save_credentials_prompt(QWidget& parent, Web::CredentialsSaveRequestPayload const& payload)

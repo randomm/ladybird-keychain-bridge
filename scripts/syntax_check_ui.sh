@@ -22,7 +22,14 @@ say() { printf '%s\n' "$*"; }
 die() { say "FAIL: $*"; fail=1; }
 
 [ -d "$TREE/.git" ] || die "pinned tree not found at $TREE"
-[ -n "$(git -C "$TREE" status --porcelain)" ] && die "pinned tree is not clean"
+if [ -n "$(git -C "$TREE" status --porcelain)" ]; then
+    # The gate owns apply/restore of the pinned tree. Running it while a patch
+    # stack or edits are applied (e.g. mid owner-build) would make every
+    # `git apply` below fail and the final restore WIPE the foreign state.
+    # Bail out before touching anything.
+    say "FAIL: pinned tree is not clean — a patch stack or edits are applied (do not run the gate during a build)"
+    exit 1
+fi
 
 for p in "$BRIDGE"/patches/ladybird/000*.patch; do
     git -C "$TREE" apply "$p" || { die "apply failed: $p"; break; }

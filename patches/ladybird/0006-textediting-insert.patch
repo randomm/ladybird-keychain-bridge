@@ -183,3 +183,25 @@ diff --git a/Services/WebContent/WebContentServer.ipc b/Services/WebContent/WebC
      mouse_event(Web::PageId page_id, Web::MouseEvent event) =|
      mouse_event_in_hosted_root(Web::PageId page_id, Web::HTML::CrossProcessId navigable_id, Web::MouseEvent event) =|
      pinch_event_in_hosted_root(Web::PageId page_id, Web::HTML::CrossProcessId navigable_id, Web::PinchEvent event) =|
+diff --git a/UI/Qt/NativeTextEditingLineEdit.cpp b/UI/Qt/NativeTextEditingLineEdit.cpp
+--- a/UI/Qt/NativeTextEditingLineEdit.cpp
++++ b/UI/Qt/NativeTextEditingLineEdit.cpp
+@@ -8,6 +8,7 @@
+ #include <QTextBoundaryFinder>
+ #include <QTextLayout>
+ #include <UI/Qt/NativeTextEditingLineEdit.h>
++#include <UI/Qt/StringUtils.h>
+ 
+ #ifdef AK_OS_MACOS
+ #    include <UI/Qt/MacWindow.h>
+@@ -61,6 +62,10 @@
+     setCursorMoveStyle(Qt::LogicalMoveStyle);
+     using Type = Web::TextEditingCommand::Type;
+     switch (command.type) {
++    case Type::InsertText:
++        if (!isReadOnly())
++            insert(qstring_from_utf16_string(command.text));
++        break;
+     case Type::MoveBackward:
+         cursorBackward(extend);
+         break;

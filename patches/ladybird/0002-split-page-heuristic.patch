@@ -42,7 +42,7 @@ diff --git a/Libraries/LibWeb/HTML/HTMLInputElement.cpp b/Libraries/LibWeb/HTML/
 +        m_credentials_blur_prompted = true; // coalesce: one split-page offer per field instance
 +        CredentialsSaveRequestPayload payload;
 +        payload.field_scope = "password_only"_string;
-+        payload.secret = String::from_utf8(value().to_byte_string());
++        payload.secret = String::from_utf8_with_replacement_character(value().to_byte_string());
 +        auto& doc = document();
 +        payload.frame_origin = doc.origin().serialize();
 +        payload.submit_action_origin = payload.frame_origin;

@@ -6,6 +6,10 @@
 
 #include <cstdint>
 
+// Prototype ahead of the definition: clang -Wmissing-prototypes (on in the
+// embedding browser build's global flag set) needs a visible declaration.
+extern "C" int LLVMFuzzerTestOneInput(std::uint8_t const* data, std::size_t size);
+
 extern "C" int LLVMFuzzerTestOneInput(std::uint8_t const* data, std::size_t size) {
     if (size < 16 + 12 + 1 + 1)
         return 0;

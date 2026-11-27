@@ -305,8 +305,13 @@ NEW_FILES["Libraries/LibWeb/CredentialManagement/CredentialsContainerBridge.cpp"
 
 #include <AK/Utf16String.h>
 #include <LibJS/HostClassBuilder.h>
+#include <LibGC/Cell.h>
+#include <LibJS/Runtime/GlobalObject.h>
+#include <LibJS/Runtime/Object.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/Export.h>
+#include <LibWeb/HTML/LocalNavigable.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/Page/Page.h>
 
@@ -319,17 +324,30 @@ void web_rust_credentials_get_resolved(JSVM*, u64 request_id, bool found, char c
                                        size_t username_bytes, char const* secret_utf8, size_t secret_bytes);
 }
 
+extern "C" {
+// Prototypes for the FFI entry points defined below (called from Rust
+// bindings and Page.cpp); clang -Wmissing-prototypes needs them visible.
+void lkb_bridge_request_credentials_get(u64 request_id, bool password_requested, bool allow_silent);
+void lkb_bridge_store_credentials(char const* username_utf8, size_t username_bytes,
+    char const* secret_utf8, size_t secret_bytes);
+void lkb_bridge_prevent_silent_access();
+void lkb_bridge_on_js_get_resolved(u64 request_id, bool found, Utf16String const& username, Utf16String const& secret);
+}
+
 namespace {
 
 // The document whose script called the CredentialsContainer; WebContent runs one VM on the main
 // thread, and these calls arrive synchronously from a running script.
-HTML::Document* current_credentials_document()
+GC::Ptr<DOM::Document> current_credentials_document()
 {
-    auto& realm = *Bindings::main_thread_vm().active_realm();
-    auto* window = as_if<HTML::Window>(&realm.global_object());
+    auto& realm = Bindings::main_thread_vm().realm();
+    auto* window = HTML::window_from_global_object(realm.global_object());
     if (!window)
-        return nullptr;
-    return window->document();
+        return {};
+    auto navigable = window->navigable();
+    if (!navigable)
+        return {};
+    return navigable->active_document();
 }
 
 Utf16String utf16_from_utf8_ffi(char const* data, size_t bytes)
@@ -343,9 +361,9 @@ Utf16String utf16_from_utf8_ffi(char const* data, size_t bytes)
 
 extern "C" {
 
-void lkb_bridge_request_credentials_get(u64 request_id, bool password_requested, bool allow_silent)
+WEB_API void lkb_bridge_request_credentials_get(u64 request_id, bool password_requested, bool allow_silent)
 {
-    auto* document = current_credentials_document();
+    auto document = current_credentials_document();
     if (!document) {
         auto& vm = Bindings::main_thread_vm();
         web_rust_credentials_get_resolved(JS::HostABI::vm_to_abi(vm), request_id, false, nullptr, 0, nullptr, 0);
@@ -355,10 +373,10 @@ void lkb_bridge_request_credentials_get(u64 request_id, bool password_requested,
         Utf16String::from_utf8(document->origin().serialize()), allow_silent, password_requested);
 }
 
-void lkb_bridge_store_credentials(char const* username_utf8, size_t username_bytes,
-                                  char const* secret_utf8, size_t secret_bytes)
+WEB_API void lkb_bridge_store_credentials(char const* username_utf8, size_t username_bytes,
+    char const* secret_utf8, size_t secret_bytes)
 {
-    auto* document = current_credentials_document();
+    auto document = current_credentials_document();
     if (!document)
         return;
     document->page().did_request_js_store_credentials(
@@ -367,22 +385,22 @@ void lkb_bridge_store_credentials(char const* username_utf8, size_t username_byt
         utf16_from_utf8_ffi(secret_utf8, secret_bytes));
 }
 
-void lkb_bridge_prevent_silent_access()
+WEB_API void lkb_bridge_prevent_silent_access()
 {
-    auto* document = current_credentials_document();
+    auto document = current_credentials_document();
     if (!document)
         return;
     document->page().did_request_js_prevent_silent_access(Utf16String::from_utf8(document->origin().serialize()));
 }
 
-void lkb_bridge_on_js_get_resolved(u64 request_id, bool found, Utf16String const& username, Utf16String const& secret)
+WEB_API void lkb_bridge_on_js_get_resolved(u64 request_id, bool found, Utf16String const& username, Utf16String const& secret)
 {
     auto& vm = Bindings::main_thread_vm();
     auto username_utf8 = username.to_byte_string(AllowLonelySurrogates::Yes);
     auto secret_utf8 = secret.to_byte_string(AllowLonelySurrogates::Yes);
     web_rust_credentials_get_resolved(JS::HostABI::vm_to_abi(vm), request_id, found,
-        username_utf8.characters(), username_utf8.byte_count(),
-        secret_utf8.characters(), secret_utf8.byte_count());
+        username_utf8.characters(), username_utf8.bytes().size(),
+        secret_utf8.characters(), secret_utf8.bytes().size());
 }
 
 }
@@ -506,7 +524,7 @@ void ConnectionFromClient::resolve_js_get_credentials(Web::PageId page_id, u64 r
 {
     // M8: the vault answer to a page's navigator.credentials.get().
     (void)page_id;
-    CredentialManagement::lkb_bridge_on_js_get_resolved(request_id, found, username, secret);
+    Web::CredentialManagement::lkb_bridge_on_js_get_resolved(request_id, found, username, secret);
 }""", "0007")
 
 # forward declaration of the bridge entry in ConnectionFromClient.cpp
@@ -821,6 +839,7 @@ NEW_FILES["Tests/LibWeb/TestCredentialsContainer.cpp"] = r'''/*
 #include <LibTest/TestCase.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/Bindings/PrincipalHostDefined.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/LocalTraversableNavigable.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/Loader/ContentBlocker.h>
@@ -872,7 +891,7 @@ public:
     {
         m_last_store_origin = move(origin);
         m_last_store_username = move(username);
-        m_last_store_secret_length = secret.length();
+        m_last_store_secret_length = secret.utf16_view().length_in_code_units();
     }
     virtual void page_did_request_js_prevent_silent_access(Utf16String origin) override
     {

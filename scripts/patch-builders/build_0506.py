@@ -111,8 +111,8 @@ bool Page::handle_text_editing_command_from_ui(TextEditingCommand const& command
         auto pending = m_pending_credential_fills.take(*command.fill_token);
         if (!pending.has_value())
             return false;
-        auto element = pending->element.strong_ref();
-        if (!element || !element->is_connected())
+        auto element = pending->element.ptr();
+        if (element == nullptr || !element->is_connected())
             return false;
         if (element->document().focused_area().ptr() != element.ptr())
             return false;
@@ -196,8 +196,8 @@ void HTMLInputElement::did_receive_focus()
             if (relevant_window && relevant_window->has_transient_activation()) {
                 auto rect = get_bounding_client_rect();
                 auto navigable = document().navigable();
-                if (navigable && navigable->local_root()) {
-                    auto position = navigable->to_page_position(Web::CSSPixelPoint { rect.x(), rect.bottom() });
+                if (navigable != nullptr) {
+                    auto position = navigable->to_page_position(CSSPixelPoint { rect.left(), rect.bottom() });
                     document().page().did_request_credential_suggestions(GC::Weak<HTMLElement> { *this },
                         navigable->local_root()->id(), URL::Origin(document().origin()), position,
                         rect.width(), kind.release_value());
@@ -420,6 +420,14 @@ edit("UI/Qt/NativeTextEditingLineEdit.cpp",
 edit("UI/Qt/NativeTextEditingLineEdit.cpp",
      "include <UI/Qt/NativeTextEditingLineEdit.h>\n\n#ifdef AK_OS_MACOS",
      "include <UI/Qt/NativeTextEditingLineEdit.h>\n#include <UI/Qt/StringUtils.h>\n\n#ifdef AK_OS_MACOS", "0006")
+
+edit("Libraries/LibWeb/HTML/HTMLInputElement.cpp",
+     "#include <LibWeb/HTML/HTMLDataListElement.h>\n#include <LibWeb/HTML/HTMLFormElement.h>",
+     "#include <LibWeb/HTML/HTMLDataListElement.h>\n#include <LibWeb/HTML/HTMLFormControlsCollection.h>\n#include <LibWeb/HTML/HTMLFormElement.h>", "0005")
+
+edit("Libraries/LibWeb/HTML/HTMLInputElement.cpp",
+     "#include <LibWeb/HTML/HTMLOptionElement.h>\n#include <LibWeb/HTML/Numbers.h>",
+     "#include <LibWeb/HTML/HTMLOptionElement.h>\n#include <LibWeb/HTML/LocalNavigable.h>\n#include <LibWeb/HTML/Numbers.h>", "0005")
 
 # Upstream file: 0006 grew TextEditingCommand with text/fill_token, so these
 # aggregate inits must name every field under -Werror,-Wmissing-field-initializers.

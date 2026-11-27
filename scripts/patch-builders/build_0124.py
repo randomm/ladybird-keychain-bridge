@@ -100,7 +100,7 @@ edit(F,
     // the form's action attribute resolved against the document base URL; an
     // absent action resolves to the document URL.
     URL::URL action_url = document.url();
-    if (auto action_attribute = get_attribute_ns({}, AttributeNames::action); action_attribute.has_value()) {
+    if (auto action_attribute = form.get_attribute(AttributeNames::action); action_attribute.has_value()) {
         if (auto parsed = URL::Parser::basic_parse(*action_attribute, document.base_url()); parsed.has_value())
             action_url = parsed.release_value();
     }

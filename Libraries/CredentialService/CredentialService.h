@@ -1,0 +1,59 @@
+#pragma once
+
+#include "CapabilityToken.h"
+#include "Clock.h"
+#include "SaveRequest.h"
+#include "VaultStore.h"
+
+#include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
+
+namespace lkb {
+
+struct AuditEvent {
+    std::string event;
+    std::string origin;
+    std::size_t length{0}; // length only — never secret material
+};
+
+struct Capabilities {
+    bool save_enabled{true};
+    bool autofill_enabled{true};
+    bool keychain_available{true};
+};
+
+// The security core. Contains zero log/crash/print calls: the only observable
+// side-channel is audit_log(), whose events carry {event, origin, length}.
+class CredentialService {
+  public:
+    CredentialService(VaultStore& vault, Clock& clock) : m_vault(vault), m_clock(clock) {}
+
+    ErrorOr<SaveDecision> offer_save(SaveRequest const&);
+    ErrorOr<std::vector<Match>> lookup_for_origin(Origin const&,
+                                                  std::optional<std::string_view> hint,
+                                                  std::uint64_t page_token);
+    ErrorOr<void> save_from_form(SaveRequest const&, SaveDecision const&);
+    ErrorOr<void> delete_credential(std::int64_t id, CapabilityToken const&);
+    ErrorOr<void> delete_bulk(Origin const&, CapabilityToken const&);
+    ErrorOr<std::vector<CredentialRecord>> list(CapabilityToken const&);
+    ErrorOr<void> mark_never(Origin const&);
+
+    ErrorOr<std::uint64_t> issue_page_token(Origin const&);
+    void revoke_page_token(std::uint64_t token);
+
+    std::vector<AuditEvent> const& audit_log() const { return m_audit; }
+    Capabilities capabilities() const;
+
+  private:
+    void audit(std::string event, Origin const& origin, std::size_t length);
+
+    VaultStore& m_vault;
+    Clock& m_clock;
+    std::vector<AuditEvent> m_audit;
+    std::map<std::uint64_t, std::pair<Origin, std::int64_t>> m_page_tokens;
+    std::uint64_t m_next_page_token{1};
+};
+
+} // namespace lkb

@@ -54,5 +54,7 @@ unchanged.
   path; the dedicated-keychain mode exists for the owner-run probe/smoke tools
   only.
 - CI never builds the browser (offline doctrine); `check_patches.sh` proves the
-  stack applies, `run_tests.sh` proves the libraries — the browser build is the
-  owner's release step.
+  stack applies, `run_tests.sh` proves the libraries, and
+  `scripts/syntax_check_ui.sh` (wired into `run_tests.sh`) proves the patched
+  UI translation units COMPILE against the pinned tree — the browser build
+  itself remains the owner's release step.

@@ -9,14 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev libsqlite3-dev
+      - run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev libsqlite3-dev clang-format
       - run: sh scripts/run_tests.sh
 
   core-macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: brew install cmake openssl@3
+      - run: brew install cmake openssl@3 clang-format
       - name: gate
         env:
           OPENSSL_ROOT_DIR: ${{ vars.OPENSSL_ROOT_DIR || '' }}

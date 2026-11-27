@@ -2,11 +2,11 @@
 # Apply order is numeric; this set is a STACK — never apply out of order. Verify:
 #   sh scripts/sync_ladybird.sh   # asserts HEAD == pinned sha
 #   sh scripts/check_patches.sh   # stacked apply-check, restores tree
-sha256 539256e6dfc7182908b5dcf46e92321d9bc43cc446b152157018039122cc5987  patches/ladybird/0001-form-detection.patch
-sha256 f7229f6add57c54588fb071d5656604f2cdc24567dac2c043d905713958c6959  patches/ladybird/0002-split-page-heuristic.patch
-sha256 fb0f6deeeb6b56c99f08ae34f4a62ba93e6ff1e26106b6c40fe0581af21f96b5  patches/ladybird/0003-credentials-ipc.patch
-sha256 4f6321df1df461a8a5c9ad9ca396e288609114e4537ead0d9c14bf4f92d2a3b6  patches/ladybird/0004-save-prompt.patch
-sha256 9083b5217f32e2d5cfb8d15efa174fecd4535517a5f6a7b2d8c5de3399cd178a  patches/ladybird/0005-autofill-popup.patch
-sha256 784c29d5bbb3e2f81d3b32acc946a0cd7f23824f183c1b523fc17880e29d097e  patches/ladybird/0006-textediting-insert.patch
-sha256 d09bf6dee902cfb1b4e160012d451a843b82a45bae15cb166c62dfc0e922ff60  patches/ladybird/0007-credentials-container.patch
-sha256 c700b6d1dd0431c78d50593282878d8a38c2193211926c13a1b70be6c837a562  patches/ladybird/0008-credential-settings-webui.patch
+sha256 56023fe355c92b9d8b970540f2d10040a3877fe5ee3441337015e1ad9fae5676  patches/ladybird/0001-form-detection.patch
+sha256 f6e930b0a6efd0bec6a1f7343b04a0dabd52e5f8bb083889056e4275e53e0264  patches/ladybird/0002-split-page-heuristic.patch
+sha256 35995aa627665d00f430704630f8ac5f29579874987d3a7dc8f50f4e4b7a5c66  patches/ladybird/0003-credentials-ipc.patch
+sha256 34e1f79270125faf49800a7bfed318b01d36246d57b40219a0baf9f5c9f911ee  patches/ladybird/0004-save-prompt.patch
+sha256 a36e8a6e8eb808fff0ae558ac5fed00bcdefc309485f8033d424d997fc8ec005  patches/ladybird/0005-autofill-popup.patch
+sha256 96314a62ad4b5cb9594514fa2d7d1a8754dbd77cd0c535e81b9a31e0e3080535  patches/ladybird/0006-textediting-insert.patch
+sha256 ee5a0e296707f1c40fb99b613adb57319f55e0a0cfaa462b0cb0dd1734ddc027  patches/ladybird/0007-credentials-container.patch
+sha256 a38696ddc5a8f8b1b651f5109495e02bc01b476588a0728e92b024e311ccad32  patches/ladybird/0008-credential-settings-webui.patch

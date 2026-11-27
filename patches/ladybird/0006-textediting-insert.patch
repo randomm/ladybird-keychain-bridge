@@ -32,7 +32,7 @@ diff --git a/Libraries/LibWeb/Page/EventHandler.cpp b/Libraries/LibWeb/Page/Even
 diff --git a/Libraries/LibWeb/Page/Page.cpp b/Libraries/LibWeb/Page/Page.cpp
 --- a/Libraries/LibWeb/Page/Page.cpp
 +++ b/Libraries/LibWeb/Page/Page.cpp
-@@ -700,6 +700,18 @@
+@@ -700,6 +700,33 @@
      return navigable->event_handler().handle_keydown(key, modifiers, code_point, repeat, should_insert_text, async_scroll_performed_default_action, editing_commands, native_editing_binding_resolved);
  }
  
@@ -41,6 +41,21 @@ diff --git a/Libraries/LibWeb/Page/Page.cpp b/Libraries/LibWeb/Page/Page.cpp
 +    // ladybird-keychain-bridge (M7b): the UI injects a user-chosen credential
 +    // into the focused field only after a real click on a suggestion. Reuses
 +    // the native command path so the site observes beforeinput/input like typing.
++    if (command.type == TextEditingCommand::Type::InsertText) {
++        // Credential inserts are tokenized: the token was minted for one popup
++        // request against one element, is single-use, and the element must
++        // still be connected and focused when the secret arrives.
++        if (!command.fill_token.has_value())
++            return false;
++        auto pending = m_pending_credential_fills.take(*command.fill_token);
++        if (!pending.has_value())
++            return false;
++        auto element = pending->element.strong_ref();
++        if (!element || !element->is_connected())
++            return false;
++        if (element->document().focused_area().ptr() != element.ptr())
++            return false;
++    }
 +    auto navigable = hosted_focused_navigable();
 +    if (!navigable)
 +        return false;
@@ -66,15 +81,17 @@ diff --git a/Libraries/LibWeb/Page/Page.h b/Libraries/LibWeb/Page/Page.h
 diff --git a/Libraries/LibWebCommon/Page/TextEditingCommand.h b/Libraries/LibWebCommon/Page/TextEditingCommand.h
 --- a/Libraries/LibWebCommon/Page/TextEditingCommand.h
 +++ b/Libraries/LibWebCommon/Page/TextEditingCommand.h
-@@ -7,6 +7,7 @@
+@@ -6,7 +6,9 @@
+ 
  #pragma once
  
++#include <AK/Optional.h>
  #include <AK/Types.h>
 +#include <AK/Utf16String.h>
  
  namespace Web {
  
-@@ -31,10 +32,12 @@
+@@ -31,10 +33,15 @@
          DeleteWordBackward,
          DeleteWordForward,
          DeleteToEndOfParagraph,
@@ -84,13 +101,16 @@ diff --git a/Libraries/LibWebCommon/Page/TextEditingCommand.h b/Libraries/LibWeb
      Type type { Type::MoveBackward };
      bool extend_selection { false };
 +    Utf16String text;
++    // Credential inserts carry the token the UI process received with the
++    // popup request; Page::handle_text_editing_command_from_ui validates it.
++    Optional<u64> fill_token;
  
      bool operator==(TextEditingCommand const&) const = default;
  };
 diff --git a/Libraries/LibWebCommon/Page/TextEditingCommand.ipc b/Libraries/LibWebCommon/Page/TextEditingCommand.ipc
 --- a/Libraries/LibWebCommon/Page/TextEditingCommand.ipc
 +++ b/Libraries/LibWebCommon/Page/TextEditingCommand.ipc
-@@ -26,10 +26,12 @@
+@@ -26,10 +26,13 @@
      DeleteWordBackward,
      DeleteWordForward,
      DeleteToEndOfParagraph,
@@ -102,6 +122,7 @@ diff --git a/Libraries/LibWebCommon/Page/TextEditingCommand.ipc b/Libraries/LibW
      Web::TextEditingCommand::Type type;
      bool extend_selection;
 +    Utf16String text;
++    Optional<u64> fill_token;
  }
 diff --git a/Services/WebContent/ConnectionFromClient.cpp b/Services/WebContent/ConnectionFromClient.cpp
 --- a/Services/WebContent/ConnectionFromClient.cpp
@@ -154,7 +175,7 @@ diff --git a/Services/WebContent/ConnectionFromClient.h b/Services/WebContent/Co
 diff --git a/Services/WebContent/WebContentServer.ipc b/Services/WebContent/WebContentServer.ipc
 --- a/Services/WebContent/WebContentServer.ipc
 +++ b/Services/WebContent/WebContentServer.ipc
-@@ -157,6 +157,7 @@
+@@ -156,6 +156,7 @@
      deny_fullscreen_window(Web::PageId page_id) =|
  
      key_event(Web::PageId page_id, Web::KeyEvent event) =|

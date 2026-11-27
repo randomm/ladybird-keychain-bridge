@@ -1,6 +1,7 @@
+0001: login-form detection + credential-save payload (M4).
+
 diff --git a/Libraries/LibWeb/HTML/CredentialsSaveRequestPayload.h b/Libraries/LibWeb/HTML/CredentialsSaveRequestPayload.h
 new file mode 100644
-index 00000000..8b69c33a
 --- /dev/null
 +++ b/Libraries/LibWeb/HTML/CredentialsSaveRequestPayload.h
 @@ -0,0 +1,26 @@
@@ -31,21 +32,23 @@ index 00000000..8b69c33a
 +
 +}
 diff --git a/Libraries/LibWeb/HTML/HTMLFormElement.cpp b/Libraries/LibWeb/HTML/HTMLFormElement.cpp
-index 4351de96..c2b5d4cc 100644
 --- a/Libraries/LibWeb/HTML/HTMLFormElement.cpp
 +++ b/Libraries/LibWeb/HTML/HTMLFormElement.cpp
-@@ -41,6 +41,7 @@
- #include <LibWeb/HTML/RadioNodeList.h>
- #include <LibWeb/HTML/Scripting/Environments.h>
- #include <LibWeb/HTML/SubmitEvent.h>
-+#include <LibWeb/Page/Page.h>
- #include <LibWeb/HighResolutionTime/TimeOrigin.h>
- #include <LibWeb/Infra/SerializedURL.h>
- #include <LibWeb/Page/Page.h>
-@@ -123,6 +124,52 @@ WebIDL::ExceptionOr<void> HTMLFormElement::implicitly_submit_form()
-     return {};
- }
+@@ -13,6 +13,8 @@
+ #include <AK/Utf16StringBuilder.h>
+ #include <LibJS/HostClassBuilder.h>
+ #include <LibTextCodec/Decoder.h>
++#include <LibURL/Parser.h>
++#include <LibURL/URL.h>
+ #include <LibWeb/Bindings/CSS.h>
+ #include <LibWeb/Bindings/HTMLFormElement.h>
+ #include <LibWeb/Bindings/Wrappable.h>
+@@ -121,6 +123,60 @@
+     TRY(submit_form(*this, { .user_involvement = UserNavigationInvolvement::Activation }));
  
+     return {};
++}
++
 +static bool looks_like_username_field(HTMLInputElement const& input)
 +{
 +    if (input.type_state() == HTMLInputElement::TypeAttributeState::Password)
@@ -73,7 +76,7 @@ index 4351de96..c2b5d4cc 100644
 +            username = input.value();
 +    }
 +
-+    if (!secret.has_value())
++    if (!secret.has_value() || secret->is_empty())
 +        return {};
 +
 +    CredentialsSaveRequestPayload payload;
@@ -82,33 +85,39 @@ index 4351de96..c2b5d4cc 100644
 +    payload.secret = String::from_utf8(secret->to_byte_string());
 +    auto& document = form.document();
 +    payload.frame_origin = document.origin().serialize();
-+    payload.submit_action_origin = payload.frame_origin;
-+    if (auto top_level = document.relevant_settings_object().top_level_origin(); top_level.has_value())
++    // https://w3c.github.io/webappsec-credential-management/#submit-action-origin:
++    // the form's action attribute resolved against the document base URL; an
++    // absent action resolves to the document URL.
++    URL::URL action_url = document.url();
++    if (auto action_attribute = get_attribute_ns({}, AttributeNames::action); action_attribute.has_value()) {
++        if (auto parsed = URL::Parser::basic_parse(*action_attribute, document.base_url()); parsed.has_value())
++            action_url = parsed.release_value();
++    }
++    payload.submit_action_origin = action_url.origin().serialize();
++    if (auto top_level = document.relevant_settings_object().top_level_origin; top_level.has_value())
 +        payload.top_level_origin = top_level->serialize();
 +    else
 +        payload.top_level_origin = payload.frame_origin;
 +    if (auto navigable = document.navigable())
 +        payload.frame_id = navigable->id();
 +    return payload;
-+}
-+
- // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
- WebIDL::ExceptionOr<void> HTMLFormElement::submit_form(GC::Ref<HTMLElement> submitter, SubmitFormOptions options)
- {
-@@ -143,6 +190,11 @@ WebIDL::ExceptionOr<void> HTMLFormElement::submit_form(GC::Ref<HTMLElement> subm
-     if (has_flag(form_document->active_sandboxing_flag_set(), HTML::SandboxingFlagSet::SandboxedForms))
-         return {};
+ }
  
+ // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-form-submit
+@@ -202,6 +258,12 @@
+         if (cannot_navigate())
+             return {};
+     }
++
 +    // ladybird-keychain-bridge (M4): once per submitted form that carries a
-+    // password field, notify the UI so it can offer to save.
++    // non-empty password field, notify the UI so it can offer to save — after
++    // the submit event fired and could have canceled the submission.
 +    if (auto payload = credentials_save_request_payload(*this); payload.has_value())
 +        document().page().client().page_did_request_save_credentials(*payload);
-+
-     // 5. If the submitted from submit() method flag is not set, then:
-     if (!options.from_submit_binding) {
-         // 1. If form's firing submission events is true, then return.
+ 
+     // 6. Let encoding be the result of picking an encoding for the form.
+     auto encoding = TRY_OR_THROW_OOM(vm, pick_an_encoding());
 diff --git a/Libraries/LibWeb/HTML/HTMLFormElement.h b/Libraries/LibWeb/HTML/HTMLFormElement.h
-index 89b3a9e7..6c0fcfed 100644
 --- a/Libraries/LibWeb/HTML/HTMLFormElement.h
 +++ b/Libraries/LibWeb/HTML/HTMLFormElement.h
 @@ -11,6 +11,7 @@
@@ -119,7 +128,7 @@ index 89b3a9e7..6c0fcfed 100644
  #include <LibWeb/HTML/HTMLElement.h>
  #include <LibWeb/HTML/UserNavigationInvolvement.h>
  #include <LibWebCommon/HTML/HistoryHandlingBehavior.h>
-@@ -62,6 +63,10 @@ public:
+@@ -62,6 +63,10 @@
      WebIDL::ExceptionOr<void> submit_form(GC::Ref<HTMLElement> submitter, SubmitFormOptions);
      WebIDL::ExceptionOr<void> implicitly_submit_form();
  
@@ -131,7 +140,6 @@ index 89b3a9e7..6c0fcfed 100644
  
      // NOTE: This is for the JS bindings. Use submit_form instead.
 diff --git a/Libraries/LibWeb/Page/Page.h b/Libraries/LibWeb/Page/Page.h
-index b42898f3..cdf74c13 100644
 --- a/Libraries/LibWeb/Page/Page.h
 +++ b/Libraries/LibWeb/Page/Page.h
 @@ -50,6 +50,7 @@
@@ -142,7 +150,7 @@ index b42898f3..cdf74c13 100644
  #include <LibWeb/HTML/DedicatedWorkerThreadLink.h>
  #include <LibWeb/HTML/Focus.h>
  #include <LibWeb/HTML/NavigationSourceSnapshot.h>
-@@ -860,6 +861,7 @@ public:
+@@ -860,6 +861,7 @@
      virtual void page_did_request_maximize_window(u64) { }
      virtual void page_did_request_minimize_window() { }
      virtual void page_did_request_fullscreen_window() { }
@@ -151,10 +159,9 @@ index b42898f3..cdf74c13 100644
      virtual void page_did_exit_picture_in_picture() { }
      virtual void page_did_change_picture_in_picture_video_size(Gfx::IntSize) { }
 diff --git a/Tests/LibWeb/CMakeLists.txt b/Tests/LibWeb/CMakeLists.txt
-index acd258ab..44d31303 100644
 --- a/Tests/LibWeb/CMakeLists.txt
 +++ b/Tests/LibWeb/CMakeLists.txt
-@@ -12,6 +12,7 @@ ladybird_test_suite(LibWeb)
+@@ -12,6 +12,7 @@
  
  set(TEST_SOURCES
      TestBlobBytes.cpp
@@ -164,10 +171,9 @@ index acd258ab..44d31303 100644
      TestCSSIDSpeed.cpp
 diff --git a/Tests/LibWeb/TestLoginFormDetection.cpp b/Tests/LibWeb/TestLoginFormDetection.cpp
 new file mode 100644
-index 00000000..95e9700b
 --- /dev/null
 +++ b/Tests/LibWeb/TestLoginFormDetection.cpp
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,132 @@
 +/*
 + * Copyright (c) 2026-present, the Ladybird developers.
 + *
@@ -268,4 +274,35 @@ index 00000000..95e9700b
 +    auto payload = Web::HTML::HTMLFormElement::credentials_save_request_payload(
 +        static_cast<Web::HTML::HTMLFormElement&>(*form));
 +    EXPECT(!payload.has_value());
++}
++
++TEST_CASE(empty_password_form_yields_no_payload)
++{
++    auto document = create_document();
++    auto form = add_form(document);
++    add_input(form, "text"_utf16, "username"_utf16, "alice"_utf16);
++    add_input(form, "password"_utf16, "password"_utf16, ""_utf16);
++
++    auto payload = Web::HTML::HTMLFormElement::credentials_save_request_payload(
++        static_cast<Web::HTML::HTMLFormElement&>(*form));
++    EXPECT(!payload.has_value());
++}
++
++TEST_CASE(action_attribute_sets_submit_action_origin)
++{
++    auto document = create_document();
++    auto form = add_form(document);
++    MUST(form->set_attribute(Web::HTML::AttributeNames::action, "https://evil.example/login"_utf16));
++    add_input(form, "text"_utf16, "username"_utf16, "alice"_utf16);
++    add_input(form, "password"_utf16, "password"_utf16, "hunter2"_utf16);
++
++    auto payload = Web::HTML::HTMLFormElement::credentials_save_request_payload(
++        static_cast<Web::HTML::HTMLFormElement&>(*form));
++    EXPECT(payload.has_value());
++    if (payload.has_value()) {
++        // The save is bound to where the password actually goes, not merely to
++        // where the page came from: a cross-origin action must be visible here.
++        EXPECT_EQ(payload->submit_action_origin, "https://evil.example"_string);
++        EXPECT_NE(payload->submit_action_origin, payload->frame_origin);
++    }
 +}

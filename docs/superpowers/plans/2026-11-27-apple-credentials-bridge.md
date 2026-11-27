@@ -157,17 +157,17 @@ Pins Review Focus 4 fully.
 
 **Files:** Create `scripts/sync_ladybird.sh` (clone Ladybird to `../ladybird-pinned` if absent; hard-assert HEAD `09fa4834`; verify-cmd), `patches/ladybird/0001-form-detection.patch`, `0002-split-page-heuristic.patch`, apply-manifest `patches/ladybird/MANIFEST` (sha + `git apply --check` instructions).
 **Interfaces:** Consumes nothing from other tasks (patch-set is standalone; payload struct mirrors Task 8 `SaveRequest` field names **verbatim** — `top_level_origin, frame_origin, submit_action_origin, username, secret, field_scope, frame_id`). Produces in Ladybird: `HTMLFormElement::submit_form()/implicitly_submit_form()` call `page().did_request_save_credentials(...)` (new PageClient hook, mirrors `page_did_request_context_menu`); M4b adds password-field blur/Enter triggers on standalone password inputs without a same-page username field.
-- [ ] Step 1: Write `tests/test_patches.sh`: runs `scripts/sync_ladybird.sh`, then for each patch `git -C ../ladybird-pinned apply --check --verbose patches/ladybird/NNNN-*.patch` from clean tree; expect FAIL (no patches).
+- [ ] Step 1: Write `scripts/check_patches.sh`: runs `scripts/sync_ladybird.sh`, then for each patch `git -C ../ladybird-pinned apply --check --verbose patches/ladybird/NNNN-*.patch` from clean tree; expect FAIL (no patches).
 - [ ] Step 2: Write patch 0001 consuming `AutocompleteElement::attribute_details()` (`credential_type/scope/field_name`): username+password at submit → fire once per form with all three origins; add WPT-style headless test `Tests/LibWeb/TestLoginFormDetection.cpp` asserting hook payloads incl. the embedded-iframe case (frame origin != top-level → payload keeps both).
 - [ ] Step 3: Write patch 0002 (M4b): `password_field_blurred` / Enter on password input without same-page username field → fire with `field_scope=password_only, username=empty` marker so UI offers "fill username later".
-- [ ] Step 4: Run `tests/test_patches.sh` → PASS (apply-clean); Ladybird full build verification is CI/manual-dispatch job (documented, not faked).
+- [ ] Step 4: Run `scripts/check_patches.sh` → PASS (apply-clean); Ladybird full build verification is CI/manual-dispatch job (documented, not faked).
 - [ ] Step 5: Commit `feat(patches): form submit + split-page credential detection against ladybird 09fa4834`.
 
 ### Task 12: IPC plumbing patch (M5)
 
 **Files:** `patches/ladybird/0003-credentials-ipc.patch`; MANIFEST updated.
 **Interfaces:** Consumes Task 11 payload names. Produces in Ladybird: `endpoint Credentials routed by Web::PageId page_id` in `Services/Hub/CredentialsServer.ipc` + messages `did_request_save_credentials(…) => ()`, `request_credential_suggestions(Origin, FrameId) => (Vector<Suggestion>)`, `credential_selected(SuggestionId) => (bool)` mirroring the spell-checker round-trip.
-- [ ] Step 1: `tests/test_patches.sh` still green with new patch (apply-clean). Step 2: patch adds the .ipc file + Hub dispatch + headless scripted-UI test `Tests/LibWebView/TestCredentialsIpc.cpp` (submit → request reaches scripted client). Step 3: CI/manual-dispatch build verifies codegen compiles (documented). Step 4: PASS apply-check. Step 5: Commit `feat(patches): credentials IPC endpoint on the Hub`.
+- [ ] Step 1: `scripts/check_patches.sh` still green with new patch (apply-clean). Step 2: patch adds the .ipc file + Hub dispatch + headless scripted-UI test `Tests/LibWebView/TestCredentialsIpc.cpp` (submit → request reaches scripted client). Step 3: CI/manual-dispatch build verifies codegen compiles (documented). Step 4: PASS apply-check. Step 5: Commit `feat(patches): credentials IPC endpoint on the Hub`.
 
 ### Task 13: Save prompt patch (M6)
 

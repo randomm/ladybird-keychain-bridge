@@ -9,14 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev libsqlite3-dev
+      - run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev libsqlite3-dev clang-format
       - run: sh scripts/run_tests.sh
 
   core-macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: brew install cmake openssl@3
+      - run: brew install cmake openssl@3 clang-format
       - name: gate
         env:
           OPENSSL_ROOT_DIR: ${{ vars.OPENSSL_ROOT_DIR || '' }}
@@ -30,23 +30,44 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y git
       - name: patch-set applies cleanly against the pinned Ladybird
-        run: sh tests/test_patches.sh
+        run: sh scripts/check_patches.sh
 
-  # Full Ladybird build with the patch-set applied: expensive, not a merge gate.
+  # Full Ladybird build with the patch-set applied. Not gated on every push:
+  # it runs for any PR touching patches/** (compile failures in the patch-set
+  # are then hard failures — no continue-on-error) and on manual dispatch.
   full-ladybird-build:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: macos-14
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - run: brew install cmake ninja openssl@3 qt
-      - run: sh scripts/sync_ladybird.sh
+        with:
+          fetch-depth: 0
+      - name: does this PR touch the patch-set?
+        id: touched
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          if git diff --name-only "origin/${BASE}"...HEAD | grep -q '^patches/'; then
+              echo hit=true >> "$GITHUB_OUTPUT"
+          fi
+      - if: github.event_name != 'pull_request' || steps.touched.outputs.hit == 'true'
+        run: brew install cmake ninja openssl@3
+      - if: github.event_name != 'pull_request' || steps.touched.outputs.hit == 'true'
+        run: sh scripts/sync_ladybird.sh
       - name: apply patch-set
+        if: github.event_name != 'pull_request' || steps.touched.outputs.hit == 'true'
         run: |
           for p in patches/ladybird/*.patch; do
             [ -e "$p" ] || break
             git -C ../ladybird-pinned am --abort 2>/dev/null || true
             git -C ../ladybird-pinned apply --3way "$GITHUB_WORKSPACE/$p"
           done
-      - name: build (verification job; owner-triggered)
-        run: echo "placeholder: full build steps land with the patch-set tasks"
+      - name: build TestLibWeb from the patched tree (preset-driven)
+        if: github.event_name != 'pull_request' || steps.touched.outputs.hit == 'true'
+        run: cmake --preset Release && cmake --build --preset Release --target TestLibWeb
+        working-directory: ../ladybird-pinned
+      - name: run the credential-detection suite
+        if: github.event_name != 'pull_request' || steps.touched.outputs.hit == 'true'
+        run: ctest --preset Release -R TestLibWeb --output-on-failure
+        working-directory: ../ladybird-pinned

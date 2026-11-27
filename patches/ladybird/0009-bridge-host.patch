@@ -1,0 +1,403 @@
+From ladybird-keychain-bridge patch-set — apply with `git apply` on the pinned Ladybird tree (09fa4834) as a stack, in numeric order.
+0009: the concrete vault delegate — CredentialsBridgeHost, Application registration, CMake (M4-M9 host).
+
+diff --git a/UI/Qt/Application.cpp b/UI/Qt/Application.cpp
+--- a/UI/Qt/Application.cpp
++++ b/UI/Qt/Application.cpp
+@@ -74,6 +74,7 @@
+ #include <UI/Qt/Tab.h>
+ #include <UI/Qt/Theme.h>
+ #include <UI/Qt/CredentialSettingsPage.h>
++#include <UI/Qt/CredentialsBridgeHost.h>
+ #include <UI/Qt/VersionPage.h>
+ #include <UI/Qt/WebContentView.h>
+ #include <UI/Qt/WebUIPage.h>
+@@ -1337,6 +1338,13 @@
+     m_web_ui_pages->register_page("credentials"_string, "Credentials"_string, [](u64 web_ui_id, WebView::IsPrivate) -> NonnullOwnPtr<WebUIPage> {
+         return make<CredentialSettingsPage>(web_ui_id);
+     });
++
++    // ladybird-keychain-bridge: register the vault-backed delegate. A null
++    // host (no bridge linked, or the keychain/vault refused us) leaves every
++    // UI surface at its declared default — nothing half-works silently.
++    m_credentials_host = CredentialsBridgeHost::try_create();
++    if (m_credentials_host)
++        set_credentials_bridge_delegate(m_credentials_host.ptr());
+ 
+     m_open_task_manager_action = Action::create("Open Task Manager"sv, ActionID::OpenTaskManager, [this]() {
+         show_process_manager();
+diff --git a/UI/Qt/Application.h b/UI/Qt/Application.h
+--- a/UI/Qt/Application.h
++++ b/UI/Qt/Application.h
+@@ -22,6 +22,8 @@
+ #include <LibWebView/CrashReportOutbox.h>
+ #include <LibWebView/ProcessSnapshot.h>
+ #include <LibWebView/UpdateCheck.h>
++namespace Ladybird { class CredentialsBridgeHost; }
++
+ #include <UI/Qt/ApplicationActions.h>
+ #include <UI/Qt/BrowserWindow.h>
+ #include <UI/Qt/HubConnection.h>
+@@ -386,6 +388,7 @@
+     OwnPtr<Bookmarks> m_bookmarks;
+     // NB: Declared after the stores and the bookmarks, so the pages that show them are gone first.
+     OwnPtr<WebUIPages> m_web_ui_pages;
++    OwnPtr<CredentialsBridgeHost> m_credentials_host; // ladybird-keychain-bridge
+     OwnPtr<ApplicationActions> m_application_actions;
+     RefPtr<HubConnection> m_hub_connection;
+     OwnPtr<QApplication> m_application;
+diff --git a/UI/Qt/CMakeLists.txt b/UI/Qt/CMakeLists.txt
+--- a/UI/Qt/CMakeLists.txt
++++ b/UI/Qt/CMakeLists.txt
+@@ -38,6 +38,7 @@
+     FeedbackPopover.cpp
+     FindInPageWidget.cpp
+     HiddenPageSizing.cpp
++    CredentialsBridgeHost.cpp
+     CredentialSettingsPage.cpp
+     HistoryPage.cpp
+     HubConnection.cpp
+@@ -92,6 +93,18 @@
+ target_link_libraries(ladybird_impl PUBLIC Qt::Core Qt::Gui Qt::Widgets)
+ target_link_libraries(ladybird_impl PRIVATE LibDatabase LibFileSystem LibUnicode)
+ 
++# ladybird-keychain-bridge host: link the vault libraries from a bridge checkout
++# (docs/integration.md) and let CredentialsBridgeHost.cpp compile its real body.
++# Without -DLKB_BRIDGE_DIR the file compiles to explicit declines.
++if(DEFINED LKB_BRIDGE_DIR)
++    add_subdirectory(${LKB_BRIDGE_DIR} ${CMAKE_BINARY_DIR}/lkb-bridge EXCLUDE_FROM_ALL)
++    target_compile_definitions(ladybird_impl PRIVATE HAVE_LKB_BRIDGE=1)
++    target_link_libraries(ladybird_impl PRIVATE lkb_bridgehost)
++    if(APPLE)
++        target_link_libraries(ladybird_impl PRIVATE lkb_secitem)
++    endif()
++endif()
++
+ if (TARGET Qt6::Positioning)
+     target_sources(ladybird_impl PRIVATE GeolocationProviderQt.cpp GeolocationProviderQt.h)
+     target_link_libraries(ladybird_impl PUBLIC Qt::Positioning)
+diff --git a/UI/Qt/CredentialsBridgeHost.cpp b/UI/Qt/CredentialsBridgeHost.cpp
+new file mode 100644
+--- /dev/null
++++ b/UI/Qt/CredentialsBridgeHost.cpp
+@@ -0,0 +1,257 @@
++/*
++ * Copyright (c) 2026-present, the Ladybird developers.
++ *
++ * SPDX-License-Identifier: BSD-2-Clause
++ */
++
++#include <UI/Qt/CredentialsBridgeHost.h>
++
++#include <AK/ByteString.h>
++#include <AK/Format.h>
++#include <AK/Platform.h>
++#include <AK/Utf16String.h>
++#include <LibCore/StandardPaths.h>
++
++#if defined(HAVE_LKB_BRIDGE) && defined(AK_OS_MACOS)
++#    include "BridgeHost.h"
++#    include "MasterKey.h"
++#    include "SecItemKeychainBackend.h"
++
++#    include <stdlib.h>
++#endif
++
++namespace Ladybird {
++
++#if defined(HAVE_LKB_BRIDGE) && defined(AK_OS_MACOS)
++
++namespace {
++
++// The MVP host proves admin intent locally: the single-use/60 s TTL token
++// contract is enforced inside CredentialService itself, and the two bulk
++// actions additionally require a real click (consume_user_activation) on the
++// page. Wiring a real redis-backed endpoint replaces this class only.
++class LocalEchoAuth final : public lkb::RedisAuthCallback {
++public:
++    virtual lkb::ErrorOr<std::string> request_token() override
++    {
++        char buf[16];
++        arc4random_buf(buf, sizeof(buf));
++        ByteString hex;
++        for (auto byte : ReadonlyBytes { reinterpret_cast<u8 const*>(buf), sizeof(buf) })
++            hex = ByteString::formatted("{}{:02x}", hex, byte);
++        return lkb::ErrorOr<std::string>::ok(std::string(hex.characters()));
++    }
++};
++
++std::string to_bs(String const& s)
++{
++    ByteString bs = s.to_byte_string();
++    return std::string(bs.characters());
++}
++
++std::string to_bs(Utf16String const& s)
++{
++    ByteString bs = s.to_byte_string();
++    return std::string(bs.characters());
++}
++
++StringView sv(std::string const& s) { return { s.data(), s.size() }; }
++
++Utf16String to_u16(std::string const& s) { return Utf16String::from_utf8(StringView { s.data(), s.size() }); }
++
++}
++
++struct CredentialsBridgeHost::Impl {
++    AK_ALLOC_WITH_KMALLOC;
++
++    Impl(lkb::SecItemKeychainBackend backend, lkb::VaultStore vault)
++        : backend(move(backend))
++        , vault(move(vault))
++        , service(this->vault, clock)
++        , host(service, auth, clock)
++    {
++    }
++
++    lkb::SecItemKeychainBackend backend;
++    lkb::VaultStore vault;
++    LocalEchoAuth auth;
++    lkb::SystemClock clock;
++    lkb::CredentialService service;
++    lkb::BridgeHost host;
++};
++
++OwnPtr<CredentialsBridgeHost> CredentialsBridgeHost::try_create()
++{
++    // Chrome-parity naming (spec §9): the master key item is
++    // service "Ladybird Safe Storage", account "Ladybird", in the default
++    // keychain. A failure here is logged as a capability state, never a hint
++    // at secret material.
++    auto backend = lkb::SecItemKeychainBackend::create("Ladybird Safe Storage", "Ladybird", std::nullopt);
++    if (backend.is_error()) {
++        dbgln("ladybird-keychain-bridge: keychain unavailable ({}); credentials stay off",
++              sv(backend.error().message));
++        return nullptr;
++    }
++    auto key = lkb::master_key_or_create(backend.value(), lkb::default_master_key_rng);
++    if (key.is_error()) {
++        dbgln("ladybird-keychain-bridge: master key unavailable ({}); credentials stay off",
++              sv(key.error().message));
++        return nullptr;
++    }
++    auto db_path = ByteString::formatted("{}/ladybird-credentials-vault.db", Core::StandardPaths::user_data_directory());
++    auto vault = lkb::VaultStore::open(std::string(db_path.characters()), std::move(key.value()));
++    if (vault.is_error()) {
++        dbgln("ladybird-keychain-bridge: vault unavailable ({}); credentials stay off",
++              sv(vault.error().message));
++        return nullptr;
++    }
++    auto host = make<CredentialsBridgeHost>();
++    host->m_impl = make<Impl>(std::move(backend.value()), std::move(vault.value()));
++    return host;
++}
++
++CredentialsBridgeHost::CredentialsBridgeHost() = default;
++CredentialsBridgeHost::~CredentialsBridgeHost() = default;
++
++bool CredentialsBridgeHost::should_offer(Web::CredentialsSaveRequestPayload const& payload)
++{
++    if (!m_impl)
++        return false;
++    return m_impl->host.should_offer(to_bs(payload.frame_origin), to_bs(payload.submit_action_origin),
++                                     to_bs(payload.username), to_bs(payload.secret)); // secret: unchanged-credential suppression
++}
++
++void CredentialsBridgeHost::did_decide(Web::CredentialsSaveRequestPayload const& payload,
++                                       CredentialsPromptOutcome outcome)
++{
++    if (!m_impl)
++        return;
++    // Dismissed leaves the vault untouched: NotNow is the service's no-op
++    // route; only NeverForSite writes anything (the never-list).
++    auto mapped = outcome == CredentialsPromptOutcome::Saved
++        ? lkb::BridgeHost::Outcome::Save
++        : outcome == CredentialsPromptOutcome::NeverForSite ? lkb::BridgeHost::Outcome::NeverForSite
++                                                            : lkb::BridgeHost::Outcome::NotNow;
++    m_impl->host.did_decide(to_bs(payload.frame_origin), to_bs(payload.top_level_origin),
++                            to_bs(payload.submit_action_origin), to_bs(payload.username),
++                            to_bs(payload.secret), mapped);
++}
++
++Vector<WebView::CredentialSuggestion> CredentialsBridgeHost::suggestions_for(Utf16String const& origin,
++                                                                             Utf16String const&)
++{
++    Vector<WebView::CredentialSuggestion> out;
++    if (!m_impl)
++        return out;
++    for (auto const& suggestion : m_impl->host.suggestions_for(to_bs(origin)))
++        out.append(WebView::CredentialSuggestion { static_cast<u64>(suggestion.id),
++                                                   to_u16(suggestion.username), to_u16(suggestion.label) });
++    return out;
++}
++
++Utf16String CredentialsBridgeHost::secret_for(u64 id)
++{
++    if (!m_impl)
++        return {};
++    auto secret = m_impl->host.take_secret(id);
++    return secret.has_value() ? to_u16(*secret) : Utf16String {};
++}
++
++void CredentialsBridgeHost::js_get_credentials(Utf16String const& origin, bool allow_silent,
++                                               bool password_requested,
++                                               Function<void(bool, Utf16String, Utf16String)> on_complete)
++{
++    if (!m_impl) {
++        on_complete(false, {}, {});
++        return;
++    }
++    auto hit = m_impl->host.js_get(to_bs(origin), allow_silent, password_requested);
++    if (!hit.has_value()) {
++        on_complete(false, {}, {});
++        return;
++    }
++    on_complete(true, to_u16(hit->first), to_u16(hit->second));
++}
++
++void CredentialsBridgeHost::js_store_credentials(Utf16String const& origin, Utf16String const& username,
++                                                 Utf16String const& secret)
++{
++    if (m_impl)
++        m_impl->host.js_store(to_bs(origin), to_bs(username), to_bs(secret));
++}
++
++void CredentialsBridgeHost::js_prevent_silent_access(Utf16String const& origin, bool prevent)
++{
++    if (m_impl)
++        m_impl->host.js_prevent_silent(to_bs(origin), prevent);
++}
++
++Vector<CredentialsBridgeHost::CredentialRow> CredentialsBridgeHost::credentials_rows()
++{
++    Vector<CredentialRow> out;
++    if (!m_impl)
++        return out;
++    for (auto const& row : m_impl->host.rows())
++        out.append(CredentialRow { to_u16(row.origin), to_u16(row.username), static_cast<u64>(row.id) });
++    return out;
++}
++
++bool CredentialsBridgeHost::credentials_delete(u64 id)
++{
++    return m_impl && m_impl->host.remove(static_cast<i64>(id));
++}
++
++bool CredentialsBridgeHost::credentials_delete_all(Utf16String const& origin)
++{
++    return m_impl && m_impl->host.remove_all(to_bs(origin));
++}
++
++Utf16String CredentialsBridgeHost::credentials_export_csv()
++{
++    if (!m_impl)
++        return {};
++    auto csv = m_impl->host.export_csv();
++    return csv.has_value() ? to_u16(*csv) : Utf16String {};
++}
++
++#else // no bridge linked (or not macOS): explicit, silent-by-default declines
++
++struct CredentialsBridgeHost::Impl { };
++
++OwnPtr<CredentialsBridgeHost> CredentialsBridgeHost::try_create() { return nullptr; }
++
++CredentialsBridgeHost::CredentialsBridgeHost() = default;
++CredentialsBridgeHost::~CredentialsBridgeHost() = default;
++
++bool CredentialsBridgeHost::should_offer(Web::CredentialsSaveRequestPayload const&) { return false; }
++
++void CredentialsBridgeHost::did_decide(Web::CredentialsSaveRequestPayload const&, CredentialsPromptOutcome) { }
++
++Vector<WebView::CredentialSuggestion> CredentialsBridgeHost::suggestions_for(Utf16String const&, Utf16String const&)
++{
++    return {};
++}
++
++Utf16String CredentialsBridgeHost::secret_for(u64) { return {}; }
++
++void CredentialsBridgeHost::js_get_credentials(Utf16String const&, bool, bool,
++                                               Function<void(bool, Utf16String, Utf16String)> on_complete)
++{
++    on_complete(false, {}, {});
++}
++
++void CredentialsBridgeHost::js_store_credentials(Utf16String const&, Utf16String const&, Utf16String const&) { }
++
++void CredentialsBridgeHost::js_prevent_silent_access(Utf16String const&, bool) { }
++
++Vector<CredentialsBridgeHost::CredentialRow> CredentialsBridgeHost::credentials_rows() { return {}; }
++
++bool CredentialsBridgeHost::credentials_delete(u64) { return false; }
++
++bool CredentialsBridgeHost::credentials_delete_all(Utf16String const&) { return false; }
++
++Utf16String CredentialsBridgeHost::credentials_export_csv() { return {}; }
++
++#endif
++
++}
+diff --git a/UI/Qt/CredentialsBridgeHost.h b/UI/Qt/CredentialsBridgeHost.h
+new file mode 100644
+--- /dev/null
++++ b/UI/Qt/CredentialsBridgeHost.h
+@@ -0,0 +1,58 @@
++/*
++ * Copyright (c) 2026-present, the Ladybird developers.
++ *
++ * SPDX-License-Identifier: BSD-2-Clause
++ */
++
++#pragma once
++
++#include <AK/OwnPtr.h>
++#include <UI/Qt/CredentialsPrompt.h>
++
++namespace Ladybird {
++
++// ladybird-keychain-bridge (M4-M9 host): the concrete delegate behind the save
++// prompt, the autofill popup, navigator.credentials and about:credentials.
++// Every vault decision lives in the bridge library's lkb::BridgeHost; this
++// class only converts Ladybird types. Secrets follow the delegate contract:
++// they never appear in suggestions or rows, and leave it only through
++// secret_for() and a js_get answer — after the user chose them.
++//
++// try_create() returns null — explicitly, not silently — when the bridge
++// library is not linked (configure without -DLKB_BRIDGE_DIR) or the
++// keychain/vault cannot be opened; the UI then degrades by the defaults
++// CredentialsBridgeDelegate already declares (no prompts, no autofill, an
++// empty management page).
++class CredentialsBridgeHost final : public CredentialsBridgeDelegate {
++public:
++    AK_ALLOC_WITH_KMALLOC;
++
++    static OwnPtr<CredentialsBridgeHost> try_create();
++    virtual ~CredentialsBridgeHost() override;
++
++    virtual bool should_offer(Web::CredentialsSaveRequestPayload const&) override;
++    virtual void did_decide(Web::CredentialsSaveRequestPayload const&, CredentialsPromptOutcome) override;
++
++    virtual Vector<WebView::CredentialSuggestion> suggestions_for(Utf16String const&, Utf16String const&) override;
++    virtual Utf16String secret_for(u64) override;
++
++    virtual void js_get_credentials(Utf16String const& origin, bool allow_silent, bool password_requested,
++                                    Function<void(bool found, Utf16String username, Utf16String secret)> on_complete) override;
++    virtual void js_store_credentials(Utf16String const& origin, Utf16String const& username, Utf16String const& secret) override;
++    virtual void js_prevent_silent_access(Utf16String const& origin, bool prevent) override;
++
++    virtual Vector<CredentialRow> credentials_rows() override;
++    virtual bool credentials_delete(u64) override;
++    virtual bool credentials_delete_all(Utf16String const&) override;
++    virtual Utf16String credentials_export_csv() override;
++
++    // Public for make<>: a host constructed without try_create() has no Impl
++    // and answers every call with the delegate's declared declines.
++    CredentialsBridgeHost();
++
++private:
++    struct Impl;
++    OwnPtr<Impl> m_impl; // null => bridge not linked; every method declines
++};
++
++}

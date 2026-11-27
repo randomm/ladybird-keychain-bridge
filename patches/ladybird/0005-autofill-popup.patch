@@ -1,0 +1,474 @@
+From ladybird-keychain-bridge patch-set — apply with `git apply` on the pinned Ladybird tree (09fa4834) after 0001-0004.
+0005: field-anchored credential autofill popup (M7a).
+
+diff --git a/Libraries/LibWeb/HTML/HTMLInputElement.cpp b/Libraries/LibWeb/HTML/HTMLInputElement.cpp
+--- a/Libraries/LibWeb/HTML/HTMLInputElement.cpp
++++ b/Libraries/LibWeb/HTML/HTMLInputElement.cpp
+@@ -50,9 +50,11 @@
+ #include <LibWeb/HTML/DecodedImageData.h>
+ #include <LibWeb/HTML/EventNames.h>
+ #include <LibWeb/HTML/HTMLDataListElement.h>
++#include <LibWeb/HTML/HTMLFormControlsCollection.h>
+ #include <LibWeb/HTML/HTMLFormElement.h>
+ #include <LibWeb/HTML/HTMLInputElement.h>
+ #include <LibWeb/HTML/HTMLOptionElement.h>
++#include <LibWeb/HTML/LocalNavigable.h>
+ #include <LibWeb/HTML/Numbers.h>
+ #include <LibWeb/HTML/Parser/HTMLParser.h>
+ #include <LibWeb/HTML/RadioButtonGroupRegistry.h>
+@@ -1817,8 +1819,41 @@
+         update_slider_ticks();
+ }
+ 
++static Optional<Utf16String> credential_field_kind(HTMLInputElement const& input)
++{
++    if (input.type_state() == HTMLInputElement::TypeAttributeState::Password)
++        return "password"_utf16;
++    if (first_is_one_of(input.type_state(), HTMLInputElement::TypeAttributeState::Text,
++                        HTMLInputElement::TypeAttributeState::Email)) {
++        if (input.parse_autocomplete_attribute().field_name == "username"_utf16)
++            return "username"_utf16;
++        if (first_is_one_of(input.name(), "username"_utf16, "user"_utf16, "email"_utf16))
++            return "username"_utf16;
++    }
++    return {};
++}
++
+ void HTMLInputElement::did_receive_focus()
+ {
++    // ladybird-keychain-bridge (M7a): a focused, empty credential field with a
++    // fresh user gesture asks the UI for a field-anchored autofill popup — the
++    // same transient-activation rule that gates a <select> picker. No gesture,
++    // no request; a field the user is already typing into is never interrupted.
++    if (is_connected() && value().is_empty()) {
++        if (auto kind = credential_field_kind(*this); kind.has_value()) {
++            auto* relevant_window = window_from_global_object(relevant_global_object(*this));
++            if (relevant_window && relevant_window->has_transient_activation()) {
++                auto rect = get_bounding_client_rect();
++                auto navigable = document().navigable();
++                if (navigable != nullptr) {
++                    auto position = navigable->to_page_position(CSSPixelPoint { rect.left(), rect.bottom() });
++                    document().page().did_request_credential_suggestions(GC::Weak<HTMLElement> { *this },
++                        navigable->local_root()->id(), URL::Origin(document().origin()), position,
++                        rect.width(), kind.release_value());
++                }
++            }
++        }
++    }
+     if (!m_date_time_fields.is_empty()) {
+         // NB: Keyboard focus starts at the first field; a click picks the field it lands on.
+         if (document().last_focus_trigger() == FocusTrigger::Key)
+diff --git a/Libraries/LibWeb/Page/Page.cpp b/Libraries/LibWeb/Page/Page.cpp
+--- a/Libraries/LibWeb/Page/Page.cpp
++++ b/Libraries/LibWeb/Page/Page.cpp
+@@ -1566,6 +1624,18 @@
+         m_pending_non_blocking_dialog_target = move(target);
+         m_client->page_did_request_select_dropdown(local_root_id, content_position, minimum_width, move(items));
+     }
++}
++
++void Page::did_request_credential_suggestions(GC::Weak<HTML::HTMLElement> target, HTML::CrossProcessId local_root_id, URL::Origin origin, Web::CSSPixelPoint content_position, Web::CSSPixels minimum_width, Utf16String field_kind)
++{
++    // The UI must prove knowledge of this token when the secret arrives
++    // (handle_text_editing_command_from_ui); stale entries are bounded.
++    if (m_pending_credential_fills.size() > 16)
++        m_pending_credential_fills.clear();
++    u64 const fill_token = m_next_credential_fill_token++;
++    m_pending_credential_fills.set(fill_token, PendingCredentialFill { .element = move(target), .kind = field_kind });
++    m_client->page_did_request_credential_suggestions(move(origin), local_root_id, content_position, minimum_width,
++                                                       move(field_kind), fill_token);
+ }
+ 
+ void Page::select_dropdown_closed(Optional<u32> const& selected_item_id)
+diff --git a/Libraries/LibWeb/Page/Page.h b/Libraries/LibWeb/Page/Page.h
+--- a/Libraries/LibWeb/Page/Page.h
++++ b/Libraries/LibWeb/Page/Page.h
+@@ -351,6 +353,8 @@
+     void file_picker_closed(Span<HTML::SelectedFile> selected_files);
+ 
+     void did_request_select_dropdown(GC::Weak<HTML::HTMLSelectElement> target, HTML::CrossProcessId local_root_id, Web::CSSPixelPoint content_position, Web::CSSPixels minimum_width, Vector<Web::HTML::SelectItem> items);
++
++    void did_request_credential_suggestions(GC::Weak<HTML::HTMLElement> target, HTML::CrossProcessId local_root_id, URL::Origin origin, Web::CSSPixelPoint content_position, Web::CSSPixels minimum_width, Utf16String field_kind);
+     void select_dropdown_closed(Optional<u32> const& selected_item_id);
+ 
+     using ClipboardRequest = GC::Ref<GC::Function<void(Vector<Clipboard::SystemClipboardItem>)>>;
+@@ -657,6 +661,16 @@
+ 
+     PendingNonBlockingDialog m_pending_non_blocking_dialog { PendingNonBlockingDialog::None };
+     GC::Weak<HTML::HTMLElement> m_pending_non_blocking_dialog_target;
++
++    // ladybird-keychain-bridge (M7a/M7b): one pending autofill offer per popup
++    // request. The element is held weakly on purpose: if it is collected, the
++    // token can never authorize an insert again.
++    struct PendingCredentialFill {
++        GC::Weak<HTML::HTMLElement> element;
++        Utf16String kind;
++    };
++    HashMap<u64, PendingCredentialFill> m_pending_credential_fills;
++    u64 m_next_credential_fill_token { 1 };
+     Utf16String m_pending_date_picker_input_type;
+ 
+     HashMap<u64, ClipboardRequest> m_pending_clipboard_requests;
+@@ -1002,6 +1016,8 @@
+     virtual void page_did_request_file_picker([[maybe_unused]] HTML::FileFilter const& accepted_file_types, Web::HTML::AllowMultipleFiles) { }
+     virtual void page_did_show_validation_message(HTML::CrossProcessId, CSSPixelPoint, Utf16String) { }
+     virtual void page_did_request_select_dropdown([[maybe_unused]] HTML::CrossProcessId local_root_id, [[maybe_unused]] Web::CSSPixelPoint content_position, [[maybe_unused]] Web::CSSPixels minimum_width, [[maybe_unused]] Vector<Web::HTML::SelectItem> items) { }
++
++    virtual void page_did_request_credential_suggestions([[maybe_unused]] URL::Origin origin, [[maybe_unused]] HTML::CrossProcessId local_root_id, [[maybe_unused]] Web::CSSPixelPoint content_position, [[maybe_unused]] Web::CSSPixels minimum_width, [[maybe_unused]] Utf16String field_kind, [[maybe_unused]] u64 fill_token) { }
+     virtual void page_did_request_geolocation_position([[maybe_unused]] u64 request_id, [[maybe_unused]] HTML::CrossProcessId requesting_document_id) { }
+     virtual void page_did_cancel_geolocation_position_request([[maybe_unused]] u64 request_id) { }
+     virtual void page_did_start_geolocation_position_watch([[maybe_unused]] u64 request_id, [[maybe_unused]] HTML::CrossProcessId requesting_document_id) { }
+diff --git a/Libraries/LibWebView/ViewImplementation.cpp b/Libraries/LibWebView/ViewImplementation.cpp
+--- a/Libraries/LibWebView/ViewImplementation.cpp
++++ b/Libraries/LibWebView/ViewImplementation.cpp
+@@ -3446,6 +3446,33 @@
+         on_request_select_dropdown(to_widget_position(content_position), minimum_width / device_pixel_ratio(), move(items));
+ }
+ 
++void ViewImplementation::did_request_credential_suggestions(Badge<WebContentPage>, WebContentPage& requesting_page, URL::Origin origin, Gfx::IntPoint content_position, i32 minimum_width, Utf16String field_kind, u64 fill_token)
++{
++    // Repeated focus of the same field of the same page (dialog close, focus
++    // restore) is not a fresh offer; the popup is anchored per page+spot+kind,
++    // mirroring how m_select_dropdown_page scopes the <select> picker.
++    if (&requesting_page == m_credential_popup_page
++        && content_position == m_last_credential_popup_position && field_kind == m_last_credential_popup_kind)
++        return;
++    m_credential_popup_page = requesting_page;
++    m_last_credential_popup_position = content_position;
++    m_last_credential_popup_kind = field_kind;
++    if (on_request_credential_suggestions)
++        on_request_credential_suggestions(origin, to_widget_position(content_position), minimum_width / device_pixel_ratio(), field_kind, fill_token);
++}
++
++void ViewImplementation::select_credential(u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token)
++{
++    page().async_credential_selected(suggestion_id);
++
++    Web::TextEditingCommand command;
++    command.type = Web::TextEditingCommand::Type::InsertText;
++    command.username = move(username);
++    command.text = move(secret);
++    command.fill_token = fill_token;
++    page().async_insert_text(command);
++}
++
+ void ViewImplementation::select_dropdown_closed(Optional<u32> const& selected_item_id)
+ {
+     NonnullRefPtr<WebContentPage> target = m_select_dropdown_page ? *m_select_dropdown_page : page();
+diff --git a/Libraries/LibWebView/ViewImplementation.h b/Libraries/LibWebView/ViewImplementation.h
+--- a/Libraries/LibWebView/ViewImplementation.h
++++ b/Libraries/LibWebView/ViewImplementation.h
+@@ -762,6 +762,7 @@
+     Function<void(PermissionPromptRequest const&, PermissionPromptCallback)> on_request_permission;
+     Function<void(PermissionPromptRequest const&)> on_cancel_permission_prompt;
+     Function<void(Web::CredentialsSaveRequestPayload const&)> on_request_save_credentials;
++    Function<void(URL::Origin const&, Gfx::IntPoint, i32, Utf16String const&, u64)> on_request_credential_suggestions;
+     Function<void(TabIndicator, bool visible)> on_tab_indicator_change;
+     Function<void(Web::HTML::FileFilter const& accepted_file_types, Web::HTML::AllowMultipleFiles)> on_request_file_picker;
+     Function<void(Gfx::IntPoint position, Utf16String const& message)> on_show_validation_message;
+@@ -802,6 +803,8 @@
+     void did_request_date_picker(Badge<WebContentPage>, WebContentPage& requesting_page, Utf16String input_type, Utf16String value, Utf16String minimum, Utf16String maximum);
+     void did_request_file_picker(Badge<WebContentPage>, WebContentPage& requesting_page, Web::HTML::FileFilter const& accepted_file_types, Web::HTML::AllowMultipleFiles);
+     void did_request_select_dropdown(Badge<WebContentPage>, WebContentPage& requesting_page, Gfx::IntPoint content_position, i32 minimum_width, Vector<Web::HTML::SelectItem> items);
++    void did_request_credential_suggestions(Badge<WebContentPage>, WebContentPage& requesting_page, URL::Origin origin, Gfx::IntPoint content_position, i32 minimum_width, Utf16String field_kind, u64 fill_token);
++    void select_credential(u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token);
+ 
+     // Something the UI shows about this view may have changed, like whether it can undo or show its source.
+     virtual void did_change_state() { }
+@@ -1279,6 +1282,9 @@
+     RefPtr<WebContentPage> m_date_picker_page;
+     RefPtr<WebContentPage> m_file_picker_page;
+     RefPtr<WebContentPage> m_select_dropdown_page;
++    RefPtr<WebContentPage> m_credential_popup_page;
++    Gfx::IntPoint m_last_credential_popup_position;
++    Utf16String m_last_credential_popup_kind;
+ 
+     static constexpr size_t MAX_SPELLING_GUESSES = 5;
+     void update_context_menu_misspelling(Optional<Utf16String> misspelled_word, Function<void()> on_complete);
+diff --git a/Libraries/LibWebView/WebContentPage.cpp b/Libraries/LibWebView/WebContentPage.cpp
+--- a/Libraries/LibWebView/WebContentPage.cpp
++++ b/Libraries/LibWebView/WebContentPage.cpp
+@@ -3512,6 +3512,12 @@
+ {
+     if (auto target = view_position(local_root_id, content_position); target.has_value())
+         target->view.did_request_select_dropdown({}, *this, target->position, minimum_width, move(items));
++}
++
++void WebContentPage::did_request_credential_suggestions(URL::Origin origin, Web::HTML::CrossProcessId local_root_id, Gfx::IntPoint content_position, i32 minimum_width, Utf16String field_kind, u64 fill_token)
++{
++    if (auto target = view_position(local_root_id, content_position); target.has_value())
++        target->view.did_request_credential_suggestions({}, *this, move(origin), target->position, minimum_width, move(field_kind), fill_token);
+ }
+ 
+ void WebContentPage::did_request_primary_paste()
+diff --git a/Libraries/LibWebView/WebContentPage.h b/Libraries/LibWebView/WebContentPage.h
+--- a/Libraries/LibWebView/WebContentPage.h
++++ b/Libraries/LibWebView/WebContentPage.h
+@@ -406,6 +406,7 @@
+     virtual void did_complete_close_preflight(u64 request_id, bool approved) override;
+     virtual void did_show_validation_message(Web::HTML::CrossProcessId local_root_id, Gfx::IntPoint position, Utf16String message) override;
+     virtual void did_request_select_dropdown(Web::HTML::CrossProcessId local_root_id, Gfx::IntPoint content_position, i32 minimum_width, Vector<Web::HTML::SelectItem> items) override;
++    virtual void did_request_credential_suggestions(URL::Origin origin, Web::HTML::CrossProcessId local_root_id, Gfx::IntPoint content_position, i32 minimum_width, Utf16String field_kind, u64 fill_token) override;
+     virtual void did_request_primary_paste() override;
+     virtual void did_update_primary_selection(String text) override;
+     virtual void did_update_session_history_entry_scroll_restoration_mode(Web::HTML::CrossProcessId navigable_id, Web::HTML::SessionHistoryEntryIdentity entry_identity, Web::HTML::ScrollRestorationMode scroll_restoration_mode) override;
+diff --git a/Services/Hub/ConnectionFromUI.cpp b/Services/Hub/ConnectionFromUI.cpp
+--- a/Services/Hub/ConnectionFromUI.cpp
++++ b/Services/Hub/ConnectionFromUI.cpp
+@@ -160,6 +160,12 @@
+         view->did_get_permission_answer(answer_id, outcome);
+         view->push_state_to_ui();
+     }
++}
++
++void ConnectionFromUI::view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token)
++{
++    if (auto* view = find_view(view_id))
++        view->select_credential(suggestion_id, move(username), move(secret), fill_token);
+ }
+ 
+ void ConnectionFromUI::active_view_changed(Optional<u64> view_id)
+diff --git a/Services/Hub/ConnectionFromUI.h b/Services/Hub/ConnectionFromUI.h
+--- a/Services/Hub/ConnectionFromUI.h
++++ b/Services/Hub/ConnectionFromUI.h
+@@ -160,6 +160,7 @@
+     virtual void update_settings(u64 change_id, ByteString changes_json) override;
+     virtual void view_answer(u64 view_id, u64 answer_id, bool answer) override;
+     virtual void view_answer_permission_request(u64 view_id, u64 answer_id, Web::Permissions::PromptOutcome outcome) override;
++    virtual void view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token) override;
+     virtual void destroy_view(u64 view_id) override;
+     virtual void view_set_viewport(u64 view_id, Web::DevicePixelSize size, double device_pixel_ratio) override;
+     virtual void view_set_system_theme(u64 view_id, Core::AnonymousBuffer theme) override;
+diff --git a/Services/Hub/HubClient.ipc b/Services/Hub/HubClient.ipc
+--- a/Services/Hub/HubClient.ipc
++++ b/Services/Hub/HubClient.ipc
+@@ -328,6 +328,7 @@
+     view_request_external_url_confirmation(u64 view_id, u64 answer_id, URL::URL url, URL::Origin initiator_origin, String application_name) =|
+     view_request_permission(u64 view_id, u64 answer_id, WebView::PermissionPromptRequest request) =|
+     view_request_save_credentials(u64 view_id, Web::CredentialsSaveRequestPayload payload) =|
++    view_request_credential_suggestions(u64 view_id, URL::Origin origin, Gfx::IntPoint content_position, i32 minimum_width, Utf16String field_kind, u64 fill_token) =|
+     view_request_date_picker(u64 view_id, Utf16String input_type, Utf16String value, Utf16String minimum, Utf16String maximum) =|
+     view_request_dictionary_lookup(u64 view_id, WebView::DictionaryLookup lookup, Gfx::IntPoint position) =|
+     view_open_new_view(u64 view_id, u64 new_view_id, Hub::ViewState new_view_state, Web::HTML::ActivateTab activate_tab, Web::HTML::WebViewHints hints) =|
+diff --git a/Services/Hub/HubServer.ipc b/Services/Hub/HubServer.ipc
+--- a/Services/Hub/HubServer.ipc
++++ b/Services/Hub/HubServer.ipc
+@@ -244,6 +244,7 @@
+     update_settings(u64 change_id, ByteString changes_json) =|
+     view_answer(u64 view_id, u64 answer_id, bool answer) =|
+     view_answer_permission_request(u64 view_id, u64 answer_id, Web::Permissions::PromptOutcome outcome) =|
++    view_select_credential(u64 view_id, u64 suggestion_id, Utf16String username, Utf16String secret, u64 fill_token) =|
+     destroy_view(u64 view_id) =|
+     view_set_viewport(u64 view_id, Web::DevicePixelSize size, double device_pixel_ratio) =|
+     view_set_system_theme(u64 view_id, Core::AnonymousBuffer theme) =|
+diff --git a/Services/Hub/View.cpp b/Services/Hub/View.cpp
+--- a/Services/Hub/View.cpp
++++ b/Services/Hub/View.cpp
+@@ -261,6 +261,11 @@
+                 ui->async_view_request_save_credentials(view_id(), payload);
+         };
+ 
++        on_request_credential_suggestions = [this](URL::Origin const& origin, Gfx::IntPoint content_position, i32 minimum_width, Utf16String const& field_kind, u64 fill_token) {
++            if (auto* ui = ConnectionFromUI::the())
++                ui->async_view_request_credential_suggestions(view_id(), origin, content_position, minimum_width, field_kind, fill_token);
++        };
++
+         on_new_web_view = [this](Web::HTML::ActivateTab activate_tab, Web::HTML::WebViewHints hints, WebView::CanonicalTraversable& traversable) {
+             auto& view = Application::the().create_view(initial_state_for_related_view(), traversable);
+             if (auto* ui = ConnectionFromUI::the()) {
+diff --git a/Services/WebContent/PageClient.cpp b/Services/WebContent/PageClient.cpp
+--- a/Services/WebContent/PageClient.cpp
++++ b/Services/WebContent/PageClient.cpp
+@@ -2280,6 +2280,11 @@
+     client().async_did_request_select_dropdown(m_id, local_root_id, page().css_to_device_point(content_position).to_type<int>(), minimum_width * device_pixels_per_css_pixel(), items);
+ }
+ 
++void PageClient::page_did_request_credential_suggestions(URL::Origin origin, Web::HTML::CrossProcessId local_root_id, Web::CSSPixelPoint content_position, Web::CSSPixels minimum_width, Utf16String field_kind, u64 fill_token)
++{
++    client().async_did_request_credential_suggestions(m_id, move(origin), local_root_id, page().css_to_device_point(content_position).to_type<int>(), minimum_width * device_pixels_per_css_pixel(), move(field_kind), fill_token);
++}
++
+ void PageClient::page_did_change_theme_color(Gfx::Color color)
+ {
+     client().async_did_change_theme_color(m_id, color);
+diff --git a/Services/WebContent/PageClient.h b/Services/WebContent/PageClient.h
+--- a/Services/WebContent/PageClient.h
++++ b/Services/WebContent/PageClient.h
+@@ -378,6 +378,7 @@
+     virtual void page_did_request_file_picker(Web::HTML::FileFilter const& accepted_file_types, Web::HTML::AllowMultipleFiles) override;
+     virtual void page_did_show_validation_message(Web::HTML::CrossProcessId, Web::CSSPixelPoint, Utf16String) override;
+     virtual void page_did_request_select_dropdown(Web::HTML::CrossProcessId local_root_id, Web::CSSPixelPoint content_position, Web::CSSPixels minimum_width, Vector<Web::HTML::SelectItem> items) override;
++    virtual void page_did_request_credential_suggestions(URL::Origin origin, Web::HTML::CrossProcessId local_root_id, Web::CSSPixelPoint content_position, Web::CSSPixels minimum_width, Utf16String field_kind, u64 fill_token) override;
+     virtual void page_did_request_geolocation_position(u64 request_id, Web::HTML::CrossProcessId requesting_document_id) override;
+     virtual void page_did_cancel_geolocation_position_request(u64 request_id) override;
+     virtual void page_did_start_geolocation_position_watch(u64 request_id, Web::HTML::CrossProcessId requesting_document_id) override;
+diff --git a/Services/WebContent/WebContentClient.ipc b/Services/WebContent/WebContentClient.ipc
+--- a/Services/WebContent/WebContentClient.ipc
++++ b/Services/WebContent/WebContentClient.ipc
+@@ -354,5 +354,5 @@
+     // ladybird-keychain-bridge: credential save offers and the autofill round-trip,
+     // mirroring the spell-checker idiom.
+     did_request_save_credentials(Web::PageId page_id, Web::CredentialsSaveRequestPayload payload) =|
+-    did_request_credential_suggestions(Web::PageId page_id, URL::Origin origin, Web::HTML::CrossProcessId frame_id, Gfx::IntPoint content_position, i32 minimum_width, Utf16String field_kind) =|
++    did_request_credential_suggestions(Web::PageId page_id, URL::Origin origin, Web::HTML::CrossProcessId frame_id, Gfx::IntPoint content_position, i32 minimum_width, Utf16String field_kind, u64 fill_token) =|
+ }
+diff --git a/UI/Qt/CredentialsPrompt.h b/UI/Qt/CredentialsPrompt.h
+--- a/UI/Qt/CredentialsPrompt.h
++++ b/UI/Qt/CredentialsPrompt.h
+@@ -6,6 +6,7 @@
+ 
+ #pragma once
+ 
++#include <LibWebView/CredentialSuggestion.h>
+ #include <LibWeb/HTML/CredentialsSaveRequestPayload.h>
+ 
+ class QWidget;
+@@ -31,6 +32,12 @@
+     // Gate the offer before any dialog opens (never-for-this-site lists, empty
+     // payloads). Default: always offer.
+     virtual bool should_offer(Web::CredentialsSaveRequestPayload const&) { return true; }
++
++    // Autofill popup (M7a): suggestions are { id, username, label } only — the
++    // secret is handed out for one selection, only when the user picks it.
++    // Defaults let a bridge that only saves register nothing for autofill.
++    virtual Vector<WebView::CredentialSuggestion> suggestions_for(Utf16String const&, Utf16String const&) { return {}; }
++    virtual Utf16String secret_for(u64) { return {}; }
+ };
+ 
+ void set_credentials_bridge_delegate(CredentialsBridgeDelegate*);
+diff --git a/UI/Qt/HubConnection.cpp b/UI/Qt/HubConnection.cpp
+--- a/UI/Qt/HubConnection.cpp
++++ b/UI/Qt/HubConnection.cpp
+@@ -249,6 +249,14 @@
+     if (!view || !view->on_request_save_credentials)
+         return;
+     view->on_request_save_credentials(payload);
++}
++
++void HubConnection::view_request_credential_suggestions(u64 view_id, URL::Origin origin, Gfx::IntPoint content_position, i32 minimum_width, Utf16String field_kind, u64 fill_token)
++{
++    auto* view = RemoteView::find(view_id);
++    if (!view || !view->on_request_credential_suggestions)
++        return;
++    view->on_request_credential_suggestions(origin, content_position, minimum_width, field_kind, fill_token);
+ }
+ 
+ void HubConnection::view_request_permission(u64 view_id, u64 answer_id, WebView::PermissionPromptRequest request)
+diff --git a/UI/Qt/HubConnection.h b/UI/Qt/HubConnection.h
+--- a/UI/Qt/HubConnection.h
++++ b/UI/Qt/HubConnection.h
+@@ -162,6 +162,7 @@
+     virtual void view_request_external_url_confirmation(u64 view_id, u64 answer_id, URL::URL url, URL::Origin initiator_origin, String application_name) override;
+     virtual void view_request_permission(u64 view_id, u64 answer_id, WebView::PermissionPromptRequest request) override;
+     virtual void view_request_save_credentials(u64 view_id, Web::CredentialsSaveRequestPayload payload) override;
++    virtual void view_request_credential_suggestions(u64 view_id, URL::Origin origin, Gfx::IntPoint content_position, i32 minimum_width, Utf16String field_kind, u64 fill_token) override;
+     virtual void view_request_date_picker(u64 view_id, Utf16String input_type, Utf16String value, Utf16String minimum, Utf16String maximum) override;
+     virtual void view_request_dictionary_lookup(u64 view_id, WebView::DictionaryLookup lookup, Gfx::IntPoint position) override;
+     virtual void view_open_new_view(u64 view_id, u64 new_view_id, Hub::ViewState new_view_state, Web::HTML::ActivateTab activate_tab, Web::HTML::WebViewHints hints) override;
+diff --git a/UI/Qt/RemoteView.h b/UI/Qt/RemoteView.h
+--- a/UI/Qt/RemoteView.h
++++ b/UI/Qt/RemoteView.h
+@@ -410,6 +410,7 @@
+     decltype(Hub::View::on_request_permission) on_request_permission;
+     decltype(Hub::View::on_cancel_permission_prompt) on_cancel_permission_prompt;
+     decltype(Hub::View::on_request_save_credentials) on_request_save_credentials;
++    decltype(Hub::View::on_request_credential_suggestions) on_request_credential_suggestions;
+     decltype(Hub::View::on_tab_indicator_change) on_tab_indicator_change;
+     Function<void(Hub::ViewState const& previous_state)> on_state_change;
+     decltype(Hub::View::on_request_file_picker) on_request_file_picker;
+diff --git a/UI/Qt/Tab.cpp b/UI/Qt/Tab.cpp
+--- a/UI/Qt/Tab.cpp
++++ b/UI/Qt/Tab.cpp
+@@ -11,6 +11,7 @@
+ #include <LibCore/Promise.h>
+ #include <LibURL/Parser.h>
+ #include <LibURL/URL.h>
++#include <LibWebCommon/HTML/SelectItem.h>
+ #include <LibWakeLock/DisplaySleepInhibitor.h>
+ #include <LibWebCommon/HTML/SelectedFile.h>
+ #include <LibWebView/Application.h>
+@@ -21,6 +22,8 @@
+ #include <LibWebView/WebContentClient.h>
+ #include <UI/Qt/Application.h>
+ #include <UI/Qt/CredentialsPrompt.h>
++#include <UI/Qt/HubConnection.h>
++#include <UI/Qt/SelectDropdown.h>
+ #include <UI/Qt/ApplicationActions.h>
+ #include <UI/Qt/BookmarkPopover.h>
+ #include <UI/Qt/BrowserWindow.h>
+@@ -601,6 +604,45 @@
+         if (Utf16String::from_utf8(view().url().origin().serialize()) != payload.frame_origin)
+             return; // committed URL and payload origin must agree before any prompt
+         show_save_credentials_prompt(view(), payload);
++    };
++
++    view().on_request_credential_suggestions = [this](URL::Origin const& origin, Gfx::IntPoint position, i32 minimum_width, Utf16String const& field_kind, u64 fill_token) {
++        // The popup may only ever aim at the page this tab actually shows.
++        if (Utf16String::from_utf8(view().url().origin().serialize()) != Utf16String::from_utf8(origin.serialize()))
++            return;
++        auto* delegate = Ladybird::credentials_bridge_delegate();
++        if (!delegate)
++            return;
++        auto suggestions = delegate->suggestions_for(Utf16String::from_utf8(origin.serialize()), field_kind);
++        if (suggestions.is_empty())
++            return;
++        if (!m_credentials_dropdown)
++            m_credentials_dropdown = new SelectDropdown(&view());
++        Vector<Web::HTML::SelectItem> items;
++        for (size_t index = 0; index < suggestions.size(); ++index) {
++            auto const& suggestion = suggestions[index];
++            Web::HTML::SelectItemOption option;
++            option.id = static_cast<u32>(index); // per-popup index: vault ids are u64
++            option.label = suggestion.label;
++            option.value = suggestion.username;
++            items.append(Web::HTML::SelectItem { AK::move(option) });
++        }
++        m_credentials_suggestions = AK::move(suggestions);
++        m_credentials_fill_token = fill_token;
++        m_credentials_dropdown->on_closed = [this](Optional<u32> const& selected_id) {
++            if (!selected_id.has_value())
++                return;
++            auto* delegate = Ladybird::credentials_bridge_delegate();
++            if (!delegate)
++                return;
++            if (*selected_id >= m_credentials_suggestions.size())
++                return;
++            auto const& suggestion = m_credentials_suggestions[static_cast<size_t>(*selected_id)];
++            HubConnection::the().async_view_select_credential(view().view_id(), suggestion.suggestion_id,
++                suggestion.username,
++                delegate->secret_for(suggestion.suggestion_id), m_credentials_fill_token);
++        };
++        m_credentials_dropdown->open(view().mapToGlobal(QPoint { position.x(), position.y() }), minimum_width, items);
+     };
+ 
+     view().on_state_change = [this](Hub::ViewState const& previous_state) {
+diff --git a/UI/Qt/Tab.h b/UI/Qt/Tab.h
+--- a/UI/Qt/Tab.h
++++ b/UI/Qt/Tab.h
+@@ -13,6 +13,7 @@
+ #include <AK/String.h>
+ #include <AK/Vector.h>
+ #include <AK/kmalloc.h>
++#include <LibWebView/CredentialSuggestion.h>
+ #include <LibCompositing/Types.h>
+ #include <LibWakeLock/DisplaySleepInhibitor.h>
+ #include <LibWebCommon/Page/PageId.h>
+@@ -44,6 +45,8 @@
+ class QVariantAnimation;
+ 
+ namespace Ladybird {
++
++class SelectDropdown;
+ 
+ class BookmarkPopover;
+ class BrowserWindow;
+@@ -272,6 +275,9 @@
+     QPointer<QFileDialog> m_file_picker_dialog;
+     QPointer<QMessageBox> m_external_url_confirmation_dialog;
+     PermissionPromptQueue m_permission_prompts;
++    SelectDropdown* m_credentials_dropdown { nullptr };
++    Vector<WebView::CredentialSuggestion> m_credentials_suggestions;
++    u64 m_credentials_fill_token { 0 };
+ 
+     bool m_suppress_javascript_dialogs_until_navigation { false };
+     // The dialogs the current document has shown, and whether the user stopped it from showing more.

@@ -9,8 +9,12 @@ session start). Read those before touching code.
 1. `scripts/run_tests.sh` — exit 0 (discovers `tests/test_*.sh`, configures/builds, runs `ctest`).
 2. `scripts/hygiene_grep.sh` — exit 0 (privacy patterns + tracked-file assertions).
 3. `clang-format --dry-run --Werror` clean on every changed C/C++/ObjC++ file.
-4. `tests/test_patches.sh` — exit 0 whenever `patches/` or `docs/superpowers/plans/` changed.
+4. `scripts/check_patches.sh` — exit 0 whenever `patches/` or `docs/superpowers/plans/` changed.
 5. Offline doctrine check: `grep -rniE 'SecItem(Add|CopyMatching|Update|Delete)' --include='*.cpp' --include='*.h' . | grep -v testing` must return empty (SecItem calls live only in `.mm` backends).
+
+Merges gate on items 1–5 (the core suites) only. Release tags additionally require the
+owner-run smoke+probe logs attached per `docs/release-gate.md` — agents never run or
+attach them; `LKB_OWNER_RUN` is a human's switch.
 
 ## Hard budgets (ratchet-only)
 

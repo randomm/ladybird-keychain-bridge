@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<!--
+  Minimal credential test page for the manual checklist (owner-run testing).
+  Serve over localhost, e.g.:  python3 -m http.server 8080
+  then open http://localhost:8080/login-form.html
+  (The bridge accepts http only for literal localhost with an explicit port.)
+-->
+<html lang="en">
+<head><meta charset="utf-8"><title>LKB login test</title></head>
+<body>
+  <h1>Sign in</h1>
+  <!-- A REAL submission is required: a cancelled submit (preventDefault) must
+       not offer a credential save, and the bridge honours that — so this page
+       navigates for real. The POST lands on python3 -m http.server, which has
+       no /signin handler and answers 501 — nothing is recorded anywhere; use
+       the Back button (or re-open this URL) to reach the form again. -->
+  <form action="/signin" method="post">
+    <p><label>Username <input name="username" type="text" autocomplete="username"></label></p>
+    <p><label>Password <input name="password" type="password" autocomplete="current-password"></label></p>
+    <p><button type="submit">Sign in</button></p>
+  </form>
+</body>
+</html>
